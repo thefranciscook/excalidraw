@@ -73,7 +73,17 @@ import {
   actionZoomOut,
 } from "../actions/actionCanvas";
 
+import {
+  getAutoBulletEdit,
+  getBackspaceEdit,
+  getDeleteEdit,
+  getEnterEdit,
+  getToggleBulletsEdit,
+} from "./textEditing";
+
 import type { ParsedDataTranferList } from "../clipboard";
+
+import type { TextEdit } from "./textEditing";
 
 import type App from "../components/App";
 import type { AppState } from "../types";
@@ -833,7 +843,21 @@ export const textWysiwyg = ({
       }
     };
 
-    editable.oninput = () => {
+    editable.oninput = (event) => {
+      // `- ` typed at the start of a line becomes a bullet (the edit's own
+      // input event carries on from here)
+      const autoBulletEdit =
+        event instanceof ownerWindow.InputEvent &&
+        event.inputType === "insertText" &&
+        event.data === " " &&
+        editable.selectionStart === editable.selectionEnd
+          ? getAutoBulletEdit(editable.value, editable.selectionStart)
+          : null;
+      if (autoBulletEdit) {
+        applyTextEdit(autoBulletEdit);
+        return;
+      }
+
       const normalized = normalizeText(editable.value);
       if (editable.value !== normalized) {
         const selectionStart = editable.selectionStart;
@@ -887,6 +911,41 @@ export const textWysiwyg = ({
       submittedViaKeyboard = true;
       handleSubmit();
     } else if (
+      event[KEYS.CTRL_OR_CMD] &&
+      event.shiftKey &&
+      event.code === CODES.EIGHT
+    ) {
+      event.preventDefault();
+      applyTextEdit(
+        getToggleBulletsEdit(
+          editable.value,
+          editable.selectionStart,
+          editable.selectionEnd,
+        ),
+      );
+    } else if (
+      (event.key === KEYS.ENTER ||
+        event.key === KEYS.BACKSPACE ||
+        event.key === KEYS.DELETE) &&
+      !event.shiftKey &&
+      !event.altKey &&
+      !event.ctrlKey &&
+      !event.metaKey &&
+      !event.isComposing &&
+      event.keyCode !== 229
+    ) {
+      const { value, selectionStart, selectionEnd } = editable;
+      const edit =
+        event.key === KEYS.ENTER
+          ? getEnterEdit(value, selectionStart, selectionEnd)
+          : event.key === KEYS.BACKSPACE
+          ? getBackspaceEdit(value, selectionStart, selectionEnd)
+          : getDeleteEdit(value, selectionStart, selectionEnd);
+      if (edit) {
+        event.preventDefault();
+        applyTextEdit(edit);
+      }
+    } else if (
       event.key === KEYS.TAB ||
       (event[KEYS.CTRL_OR_CMD] &&
         (event.code === CODES.BRACKET_LEFT ||
@@ -902,6 +961,27 @@ export const textWysiwyg = ({
       }
       // We must send an input event to resize the element
       editable.dispatchEvent(new Event("input"));
+    }
+  };
+
+  /**
+   * Edits the text as typing would: the edit can be undone (Ctrl/Cmd+Z) with
+   * the browser's own history, which setting the value would clear.
+   */
+  const applyTextEdit = ({ start, end, text, selection }: TextEdit) => {
+    editable.setSelectionRange(start, end);
+    let isEdited = false;
+    try {
+      isEdited = text
+        ? ownerDocument.execCommand("insertText", false, text)
+        : start === end || ownerDocument.execCommand("delete");
+    } catch {}
+    if (!isEdited) {
+      editable.setRangeText(text, start, end, "end");
+      editable.dispatchEvent(new Event("input"));
+    }
+    if (selection) {
+      editable.setSelectionRange(selection.start, selection.end);
     }
   };
 

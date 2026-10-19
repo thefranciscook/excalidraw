@@ -189,6 +189,65 @@ const renumberListMarker = (
   );
 };
 
+/**
+ * A bullet a list item can start with: `•` (what the text editor turns a
+ * typed `- ` or `* ` into), `◦`, `▪`, or a `-` / `*` (e.g. pasted).
+ */
+const BULLET_REGEX = /^(\s*)[•◦▪*-](?=\s|$)\s*/;
+
+export const BULLET = "•";
+
+/** the list marker a line of text starts with, for the text editor */
+export type ListLineMarker = {
+  /** where the marker starts (after the indentation) */
+  index: number;
+  /** where the item's text (after the marker and whitespace) starts */
+  contentIndex: number;
+  isBullet: boolean;
+  /**
+   * what the next item of the list starts with: `• ` after `• foo`,
+   * `  2. ` after `  1. foo`
+   */
+  nextPrefix: string;
+};
+
+/**
+ * @returns the list marker (a bullet, or `1.`, `a)`, `(iv)` etc.) the line
+ *          starts with
+ */
+export const getListLineMarker = (line: string): ListLineMarker | null => {
+  const bullet = line.match(BULLET_REGEX);
+  if (bullet) {
+    const [prefix, indent] = bullet;
+    return {
+      index: indent.length,
+      contentIndex: prefix.length,
+      isBullet: true,
+      nextPrefix: /\s$/.test(prefix) ? prefix : `${prefix} `,
+    };
+  }
+
+  const marker = parseListMarker(line);
+  const nextLine =
+    marker && marker.ordinal <= MAX_ORDINAL[marker.kind]
+      ? renumberListMarker(line, marker, marker.ordinal + 1)
+      : null;
+  if (!marker || nextLine === null) {
+    return null;
+  }
+
+  const nextPrefix = nextLine.slice(
+    0,
+    marker.contentIndex + nextLine.length - line.length,
+  );
+  return {
+    index: line.match(/^\s*/)![0].length,
+    contentIndex: marker.contentIndex,
+    isBullet: false,
+    nextPrefix: /\s$/.test(nextPrefix) ? nextPrefix : `${nextPrefix} `,
+  };
+};
+
 /** a list marker advanced by duplication, to go back and forth */
 export type ListMarkerAdvance = {
   elementId: ExcalidrawTextElement["id"];

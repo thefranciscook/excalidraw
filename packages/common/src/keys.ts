@@ -13,6 +13,7 @@ export const CODES = {
   ONE: "Digit1",
   TWO: "Digit2",
   THREE: "Digit3",
+  EIGHT: "Digit8",
   NINE: "Digit9",
   QUOTE: "Quote",
   ZERO: "Digit0",

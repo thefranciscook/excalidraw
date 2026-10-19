@@ -41,6 +41,7 @@ import {
   unmountComponent,
 } from "../tests/test-utils";
 import {
+  createEvent,
   fireEvent,
   waitFor,
   mockBoundingClientRect,
@@ -815,6 +816,62 @@ describe("textWysiwyg", () => {
 
     afterAll(() => {
       restoreOriginalGetBoundingClientRect();
+    });
+
+    it("should start a new paragraph on Enter, with a blank line between", () => {
+      textarea.value = "foo";
+      textarea.setSelectionRange(3, 3);
+      fireEvent.keyDown(textarea, { key: KEYS.ENTER });
+      expect(textarea.value).toBe("foo\n\n");
+      expect(textarea.selectionStart).toBe(5);
+      expect(textElement.originalText).toBe("foo\n\n");
+
+      // Shift+Enter is left to the browser (a line break, no blank line)
+      const event = createEvent.keyDown(textarea, {
+        key: KEYS.ENTER,
+        shiftKey: true,
+      });
+      fireEvent(textarea, event);
+      expect(event.defaultPrevented).toBe(false);
+    });
+
+    it("should continue a bulleted list on Enter", () => {
+      textarea.value = "• foo";
+      textarea.setSelectionRange(5, 5);
+      fireEvent.keyDown(textarea, { key: KEYS.ENTER });
+      expect(textarea.value).toBe("• foo\n• ");
+
+      fireEvent.keyDown(textarea, { key: KEYS.ENTER });
+      expect(textarea.value).toBe("• foo\n\n");
+    });
+
+    it("should turn `- ` typed at the start of a line into a bullet", () => {
+      textarea.value = "- ";
+      textarea.setSelectionRange(2, 2);
+      fireEvent(
+        textarea,
+        new InputEvent("input", { inputType: "insertText", data: " " }),
+      );
+      expect(textarea.value).toBe("• ");
+      expect(textElement.originalText).toBe("• ");
+    });
+
+    it("should toggle bullets with CtrlOrCmd+Shift+8", () => {
+      textarea.value = "foo\nbar";
+      textarea.setSelectionRange(0, 7);
+      fireEvent.keyDown(textarea, {
+        code: CODES.EIGHT,
+        shiftKey: true,
+        [KEYS.CTRL_OR_CMD]: true,
+      });
+      expect(textarea.value).toBe("• foo\n• bar");
+
+      fireEvent.keyDown(textarea, {
+        code: CODES.EIGHT,
+        shiftKey: true,
+        [KEYS.CTRL_OR_CMD]: true,
+      });
+      expect(textarea.value).toBe("foo\nbar");
     });
 
     it("should add a tab at the start of the first line", () => {

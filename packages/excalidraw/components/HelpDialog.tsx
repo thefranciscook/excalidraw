@@ -201,11 +201,16 @@ export const HelpDialog = ({ onClose }: { onClose?: () => void }) => {
               shortcuts={[getShortcutKey("Enter")]}
             />
             <Shortcut
+              label={t("helpDialog.textNewParagraph")}
+              shortcuts={[getShortcutKey("Enter")]}
+            />
+            <Shortcut
               label={t("helpDialog.textNewLine")}
-              shortcuts={[
-                getShortcutKey("Enter"),
-                getShortcutKey("Shift+Enter"),
-              ]}
+              shortcuts={[getShortcutKey("Shift+Enter")]}
+            />
+            <Shortcut
+              label={t("helpDialog.textBulletList")}
+              shortcuts={[getShortcutKey("CtrlOrCmd+Shift+8"), "- "]}
             />
             <Shortcut
               label={t("helpDialog.textFinish")}
