@@ -1,0 +1,389 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Whiteboards</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<style>
+  @font-face { font-family: "Assistant"; src: url("/Assistant-Regular.woff2") format("woff2"); font-display: swap; }
+  @font-face { font-family: "Virgil"; src: url("/Virgil.woff2") format("woff2"); font-display: swap; }
+
+  :root {
+    --bg: #f6f6f9;
+    --surface: #ffffff;
+    --text: #1b1b1f;
+    --muted: #6b6b76;
+    --border: #e4e4ec;
+    --accent: #6965db;
+    --accent-soft: #e0dfff;
+    --danger: #d43c3c;
+    --preview-bg: #ffffff;
+    --shadow: 0 1px 2px rgba(20, 20, 40, .06), 0 2px 8px rgba(20, 20, 40, .05);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #121214;
+      --surface: #1e1e22;
+      --text: #e3e3e8;
+      --muted: #9a9aa6;
+      --border: #2e2d39;
+      --accent: #a8a5ff;
+      --accent-soft: #2e2c5a;
+      --danger: #ff7b7b;
+      --preview-bg: #18181b;
+      --shadow: 0 1px 2px rgba(0, 0, 0, .4);
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #121214; --surface: #1e1e22; --text: #e3e3e8; --muted: #9a9aa6; --border: #2e2d39;
+    --accent: #a8a5ff; --accent-soft: #2e2c5a; --danger: #ff7b7b; --preview-bg: #18181b; --shadow: 0 1px 2px rgba(0, 0, 0, .4);
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 15px/1.45 "Assistant", system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  main { max-width: 1120px; margin: 0 auto; padding: 40px 24px 64px; }
+  header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 28px; flex-wrap: wrap; }
+  h1 { font: 400 34px/1.1 "Virgil", "Assistant", sans-serif; margin: 0; letter-spacing: .5px; }
+  .count { color: var(--muted); font-size: 14px; margin-top: 4px; }
+
+  button { font: inherit; cursor: pointer; }
+  .primary {
+    display: inline-flex; align-items: center; gap: 8px;
+    border: 0; border-radius: 10px; padding: 10px 16px;
+    background: var(--accent); color: #fff; font-weight: 600;
+  }
+  :root[data-theme="dark"] .primary { color: #121214; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .primary { color: #121214; } }
+  .primary:hover { filter: brightness(1.08); }
+  .primary:focus-visible, .card:focus-visible, .icon-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 18px; }
+  .card {
+    position: relative; display: flex; flex-direction: column;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 14px;
+    box-shadow: var(--shadow); overflow: hidden; color: inherit; text-decoration: none;
+    transition: transform .12s ease, border-color .12s ease;
+  }
+  .card:hover { transform: translateY(-2px); border-color: var(--accent); }
+  .preview { position: relative; aspect-ratio: 16 / 10; overflow: hidden; background: var(--preview-bg); border-bottom: 1px solid var(--border); display: grid; place-items: center; }
+  .preview svg { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+  .preview .empty { color: var(--muted); font: 16px "Virgil", sans-serif; }
+  .meta { padding: 12px 44px 14px 14px; min-width: 0; }
+  .name { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .when { color: var(--muted); font-size: 13px; }
+
+  .new-card {
+    border: 2px dashed var(--border); background: transparent; box-shadow: none;
+    align-items: center; justify-content: center; gap: 10px; min-height: 200px; color: var(--muted);
+  }
+  .new-card:hover { color: var(--accent); }
+  .new-card .plus { font: 44px/1 "Virgil", sans-serif; }
+
+  .icon-btn {
+    position: absolute; right: 8px; bottom: 10px; width: 32px; height: 32px; border-radius: 8px;
+    border: 0; background: transparent; color: var(--muted); display: grid; place-items: center;
+  }
+  .icon-btn:hover { background: var(--accent-soft); color: var(--text); }
+  .menu {
+    position: absolute; right: 8px; bottom: 46px; z-index: 5; min-width: 150px;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 8px 24px rgba(0,0,0,.15);
+    padding: 4px; display: none;
+  }
+  .menu.open { display: block; }
+  .menu button { display: block; width: 100%; text-align: left; border: 0; background: none; color: var(--text); padding: 8px 10px; border-radius: 6px; }
+  .menu button:hover { background: var(--accent-soft); }
+  .menu .danger { color: var(--danger); }
+
+  .actions { display: flex; gap: 10px; flex-wrap: wrap; }
+  .secondary {
+    display: inline-flex; align-items: center; gap: 8px;
+    border: 1px solid var(--border); border-radius: 10px; padding: 9px 15px;
+    background: var(--surface); color: var(--text); font-weight: 600;
+  }
+  .secondary:hover { border-color: var(--accent); color: var(--accent); }
+  .secondary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .drop-overlay {
+    position: fixed; inset: 12px; z-index: 20; display: none; place-items: center;
+    border: 3px dashed var(--accent); border-radius: 18px; background: color-mix(in srgb, var(--bg) 85%, transparent);
+    font: 24px "Virgil", sans-serif; color: var(--accent); pointer-events: none; text-align: center; padding: 16px;
+  }
+  body.dragging .drop-overlay { display: grid; }
+  .notice { background: var(--accent-soft); border-radius: 10px; padding: 10px 14px; margin-bottom: 20px; }
+  .error { color: var(--danger); }
+  .skeleton { height: 230px; border-radius: 14px; background: var(--surface); border: 1px solid var(--border); opacity: .6; }
+
+  @media (max-width: 520px) {
+    main { padding: 24px 16px 48px; }
+    h1 { font-size: 28px; }
+    .grid { grid-template-columns: 1fr 1fr; gap: 12px; }
+    .new-card { min-height: 150px; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <div>
+      <h1>Whiteboards</h1>
+      <div class="count" id="count">&nbsp;</div>
+    </div>
+    <div class="actions">
+      <button class="secondary" id="import" type="button" title="Create boards from .excalidraw files (or drop them on this page)">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V3M7 8l5-5 5 5M5 15v4a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-4"/></svg>
+        Import
+      </button>
+      <button class="primary" id="new-top" type="button">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+        New board
+      </button>
+    </div>
+    <input type="file" id="file-input" accept=".excalidraw,application/vnd.excalidraw+json,.json" multiple hidden>
+  </header>
+  <div id="notice"></div>
+  <div class="grid" id="grid">
+    <div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div>
+  </div>
+</main>
+<div class="drop-overlay">Drop .excalidraw files to import them as new boards</div>
+
+<script>
+const grid = document.getElementById("grid");
+const countEl = document.getElementById("count");
+
+if (new URLSearchParams(location.search).has("missing")) {
+  document.getElementById("notice").innerHTML = '<div class="notice">That board doesn\'t exist anymore.</div>';
+  history.replaceState(null, "", "/");
+}
+
+const timeAgo = (ts) => {
+  if (!ts || ts < 0) return "Never edited";
+  const s = Math.round((Date.now() - ts) / 1000);
+  if (s < 60) return "Edited just now";
+  const m = Math.round(s / 60);
+  if (m < 60) return `Edited ${m} min ago`;
+  const h = Math.round(m / 60);
+  if (h < 24) return `Edited ${h} h ago`;
+  const d = Math.round(h / 24);
+  if (d < 7) return `Edited ${d} day${d > 1 ? "s" : ""} ago`;
+  return "Edited " + new Date(ts).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
+};
+
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+
+// Rough SVG preview of a board from its elements' geometry.
+const preview = (elements) => {
+  if (!elements.length) return '<span class="empty">Empty board</span>';
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const e of elements) {
+    const pts = e.points && e.points.length ? e.points.map(([px, py]) => [e.x + px, e.y + py]) : [[e.x, e.y], [e.x + e.width, e.y + e.height]];
+    for (const [x, y] of pts) {
+      minX = Math.min(minX, x); minY = Math.min(minY, y); maxX = Math.max(maxX, x); maxY = Math.max(maxY, y);
+    }
+  }
+  const w = Math.max(maxX - minX, 1), h = Math.max(maxY - minY, 1);
+  const pad = Math.max(w, h) * 0.08 + 10;
+  const sw = Math.max(w, h) / 160;
+  const stroke = (c) => (!c || c === "#1e1e1e" || c === "#000000" ? "currentColor" : c);
+  const fill = (c) => (!c || c === "transparent" ? "none" : c);
+  const shapes = elements.map((e) => {
+    const s = `stroke="${esc(stroke(e.strokeColor))}" fill="${esc(fill(e.backgroundColor))}" stroke-width="${sw}"`;
+    const cx = e.x + e.width / 2, cy = e.y + e.height / 2;
+    const rot = e.angle ? ` transform="rotate(${(e.angle * 180) / Math.PI} ${cx} ${cy})"` : "";
+    switch (e.type) {
+      case "rectangle":
+      case "frame":
+      case "embeddable":
+      case "iframe":
+        return `<rect x="${e.x}" y="${e.y}" width="${e.width}" height="${e.height}" rx="${Math.min(e.width, e.height) * 0.08}" ${s}${rot}/>`;
+      case "image":
+        return `<rect x="${e.x}" y="${e.y}" width="${e.width}" height="${e.height}" stroke="currentColor" fill="currentColor" fill-opacity=".08" stroke-width="${sw}"${rot}/>`;
+      case "ellipse":
+        return `<ellipse cx="${cx}" cy="${cy}" rx="${e.width / 2}" ry="${e.height / 2}" ${s}${rot}/>`;
+      case "diamond":
+        return `<polygon points="${cx},${e.y} ${e.x + e.width},${cy} ${cx},${e.y + e.height} ${e.x},${cy}" ${s}${rot}/>`;
+      case "line":
+      case "arrow":
+      case "freedraw":
+        if (!e.points) return "";
+        return `<polyline points="${e.points.map(([px, py]) => `${e.x + px},${e.y + py}`).join(" ")}" stroke="${esc(stroke(e.strokeColor))}" fill="none" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round"/>`;
+      case "text": {
+        const lines = String(e.text || "").split("\n");
+        const fs = e.fontSize || 20;
+        return `<text x="${e.x}" y="${e.y}" font-size="${fs}" font-family="Virgil, sans-serif" fill="${esc(stroke(e.strokeColor))}"${rot}>${lines
+          .map((l, i) => `<tspan x="${e.x}" dy="${i ? fs * 1.25 : fs}">${esc(l)}</tspan>`).join("")}</text>`;
+      }
+      default:
+        return "";
+    }
+  });
+  return `<svg viewBox="${minX - pad} ${minY - pad} ${w + pad * 2} ${h + pad * 2}" preserveAspectRatio="xMidYMid meet" aria-hidden="true">${shapes.join("")}</svg>`;
+};
+
+const api = async (url, opts = {}) => {
+  const res = await fetch(url, { cache: "no-store", headers: { "Content-Type": "application/json" }, ...opts });
+  if (!res.ok) throw new Error(`${res.status}`);
+  return res.status === 204 ? null : res.json();
+};
+
+const createBoard = async () => {
+  const name = prompt("Name for the new board:", "Untitled board");
+  if (name === null) return;
+  try {
+    const { id } = await api("/api/boards", { method: "POST", body: JSON.stringify({ name }) });
+    location.href = `/b/${id}`;
+  } catch (e) {
+    alert("Couldn't create the board (" + e.message + ").");
+  }
+};
+
+const render = (boards) => {
+  countEl.textContent = boards.length === 1 ? "1 board" : `${boards.length} boards`;
+  grid.innerHTML =
+    `<button class="card new-card" id="new-card" type="button"><span class="plus">+</span><span>New board</span></button>` +
+    boards.map((b) => `
+      <a class="card" href="/b/${b.id}" data-id="${b.id}">
+        <div class="preview">${preview(b.elements)}</div>
+        <div class="meta">
+          <div class="name">${esc(b.name)}</div>
+          <div class="when">${timeAgo(b.savedAt)}</div>
+        </div>
+        <button class="icon-btn" type="button" aria-label="Board options" data-menu>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>
+        </button>
+        <div class="menu" role="menu">
+          <button type="button" data-action="rename">Rename</button>
+          <button type="button" data-action="delete" class="danger">Delete</button>
+        </div>
+      </a>`).join("");
+  document.getElementById("new-card").addEventListener("click", createBoard);
+};
+
+const notice = (html) => {
+  document.getElementById("notice").innerHTML = html ? `<div class="notice">${html}</div>` : "";
+};
+
+// Each .excalidraw file becomes a new board named after the file.
+const importFiles = async (fileList) => {
+  const files = [...fileList];
+  if (!files.length) return;
+  const created = [];
+  const failed = [];
+  for (const file of files) {
+    try {
+      const data = JSON.parse(await file.text());
+      if (data.type !== "excalidraw" || !Array.isArray(data.elements)) throw new Error("not an Excalidraw file");
+      const appState = { ...(data.appState || {}) };
+      // Exported files carry no view position; center the drawing for this window.
+      const visible = data.elements.filter((e) => !e.isDeleted);
+      if (visible.length && appState.scrollX === undefined) {
+        const xs = visible.flatMap((e) => [e.x, e.x + (e.width || 0)]);
+        const ys = visible.flatMap((e) => [e.y, e.y + (e.height || 0)]);
+        appState.zoom = { value: 1 };
+        appState.scrollX = innerWidth / 2 - (Math.min(...xs) + Math.max(...xs)) / 2;
+        appState.scrollY = innerHeight / 2 - (Math.min(...ys) + Math.max(...ys)) / 2;
+      }
+      const name = file.name.replace(/\.(excalidraw|json)$/i, "") || "Imported board";
+      const { id } = await api("/api/boards", {
+        method: "POST",
+        body: JSON.stringify({ name, elements: data.elements, appState, files: data.files || {} }),
+      });
+      created.push({ id, name });
+    } catch (e) {
+      failed.push(`${esc(file.name)} (${esc(e.message)})`);
+    }
+  }
+  if (created.length === 1 && !failed.length) {
+    location.href = `/b/${created[0].id}`;
+    return;
+  }
+  const parts = [];
+  if (created.length) parts.push(`Imported ${created.length} board${created.length > 1 ? "s" : ""}: ${created.map((b) => esc(b.name)).join(", ")}.`);
+  if (failed.length) parts.push(`<span class="error">Couldn't import ${failed.join(", ")}.</span>`);
+  notice(parts.join(" "));
+  load();
+};
+
+const fileInput = document.getElementById("file-input");
+document.getElementById("import").addEventListener("click", () => fileInput.click());
+fileInput.addEventListener("change", () => {
+  importFiles(fileInput.files);
+  fileInput.value = "";
+});
+
+let dragDepth = 0;
+const hasFiles = (ev) => [...(ev.dataTransfer?.types || [])].includes("Files");
+document.addEventListener("dragenter", (ev) => {
+  if (!hasFiles(ev)) return;
+  ev.preventDefault();
+  dragDepth++;
+  document.body.classList.add("dragging");
+});
+document.addEventListener("dragover", (ev) => { if (hasFiles(ev)) ev.preventDefault(); });
+document.addEventListener("dragleave", () => {
+  if (--dragDepth <= 0) { dragDepth = 0; document.body.classList.remove("dragging"); }
+});
+document.addEventListener("drop", (ev) => {
+  if (!hasFiles(ev)) return;
+  ev.preventDefault();
+  dragDepth = 0;
+  document.body.classList.remove("dragging");
+  importFiles(ev.dataTransfer.files);
+});
+
+const load = async () => {
+  try {
+    render(await api("/api/boards"));
+  } catch (e) {
+    grid.innerHTML = `<p class="error">Couldn't load boards (${esc(e.message)}). Try reloading.</p>`;
+  }
+};
+
+const closeMenus = () => document.querySelectorAll(".menu.open").forEach((m) => m.classList.remove("open"));
+
+grid.addEventListener("click", async (ev) => {
+  const menuBtn = ev.target.closest("[data-menu]");
+  const actionBtn = ev.target.closest("[data-action]");
+  if (!menuBtn && !actionBtn) return;
+  ev.preventDefault();
+  ev.stopPropagation();
+  const card = ev.target.closest(".card");
+  if (menuBtn) {
+    const menu = card.querySelector(".menu");
+    const wasOpen = menu.classList.contains("open");
+    closeMenus();
+    if (!wasOpen) menu.classList.add("open");
+    return;
+  }
+  closeMenus();
+  const id = card.dataset.id;
+  const current = card.querySelector(".name").textContent;
+  try {
+    if (actionBtn.dataset.action === "rename") {
+      const name = prompt("Rename board:", current);
+      if (name === null || name.trim() === current) return;
+      await api(`/api/boards/${id}`, { method: "PATCH", body: JSON.stringify({ name }) });
+    } else if (confirm(`Delete "${current}"? It's moved to the server's trash folder, so it can still be recovered.`)) {
+      await api(`/api/boards/${id}`, { method: "DELETE" });
+    } else {
+      return;
+    }
+    load();
+  } catch (e) {
+    alert("That didn't work (" + e.message + ").");
+  }
+});
+document.addEventListener("click", (ev) => { if (!ev.target.closest(".menu")) closeMenus(); });
+document.addEventListener("keydown", (ev) => { if (ev.key === "Escape") closeMenus(); });
+document.getElementById("new-top").addEventListener("click", createBoard);
+window.addEventListener("pageshow", (ev) => { if (ev.persisted) load(); });
+
+load();
+</script>
+</body>
+</html>
