@@ -1,2 +1,6 @@
 # board data written by server.js at runtime
 data/
+# secrets on the server: GitHub token, Caddy login
+.env
+.credentials
+.hash
