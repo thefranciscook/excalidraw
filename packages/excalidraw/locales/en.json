@@ -476,6 +476,8 @@
     "shortcuts": "Keyboard shortcuts",
     "textFinish": "Finish editing (text editor)",
     "textNewLine": "Add new line (text editor)",
+    "textNewParagraph": "New paragraph, or next list item (text editor)",
+    "textBulletList": "Bulleted list (text editor)",
     "title": "Help",
     "view": "View",
     "zoomToFit": "Zoom to fit all elements",
