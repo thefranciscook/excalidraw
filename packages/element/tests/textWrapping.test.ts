@@ -26,6 +26,34 @@ describe("Test wrapText", () => {
     expect(wrapText(text, font, Infinity)).toEqual(text);
   });
 
+  describe("list items", () => {
+    it("should wrap a list item below its text, not its marker", () => {
+      expect(wrapText("• one two three four", font, 100)).toEqual(
+        "• one two\n  three\n  four",
+      );
+      expect(wrapText("10. one two three", font, 100)).toEqual(
+        "10. one\n    two\n    three",
+      );
+      expect(wrapText("foo\n  - one two three\nbar", font, 100)).toEqual(
+        "foo\n  - one\n    two\n    three\nbar",
+      );
+    });
+
+    it("should leave list items that fit, and other lines, as they are", () => {
+      expect(wrapText("• one two", font, 100)).toEqual("• one two");
+      expect(wrapText("-one two three", font, 100)).toEqual("-one two\nthree");
+      expect(wrapText("1.5 one two three", font, 100)).toEqual(
+        "1.5 one\ntwo three",
+      );
+    });
+
+    it("should not indent where it'd leave the text no room", () => {
+      expect(wrapText("• one two", font, 30)).toEqual(
+        wrapText("• one two", font, 30).replace(" ", " "),
+      );
+    });
+  });
+
   it("should show the text correctly when max width reached", () => {
     const text = "Hello😀";
     const maxWidth = 10;
@@ -99,7 +127,10 @@ describe("Test wrapText", () => {
 
     const maxWidth = 100;
     const res = wrapText(text, font, maxWidth);
-    expect(res).toBe(`\tA) one\ntab\t\t- two\ntabs\n- 8 spaces`);
+    // a list item: wrapped below its text, not its marker
+    expect(res).toBe(
+      `\tA) one\n    tab\t\t-\n    two\n    tabs\n    - 8\n    spaces`,
+    );
 
     const maxWidth2 = 50;
     const res2 = wrapText(text, font, maxWidth2);

@@ -106,7 +106,7 @@ const CJK = {
    *         ↑ BREAK AFTER "」"
    */
   // eslint-disable-next-line prettier/prettier
-  OPENING:/（［｛〈《｟｢「『【〖〔〘〚＜〝/u,
+  OPENING: /（［｛〈《｟｢「『【〖〔〘〚＜〝/u,
   CLOSING: /）］｝〉》｠｣」』】〗〕〙〛＞。．，、〟‥？！：；・〜〞/u,
   /**
    * Currency symbols break before, not after
@@ -399,8 +399,61 @@ export const wrapText = (
   font: FontString,
   maxWidth: number,
 ): string => {
-  return getWrappedTextLines(text, font, maxWidth)
-    .map((line) => line.text)
+  return text
+    .split("\n")
+    .map(
+      (line) =>
+        wrapListItem(line, font, maxWidth) ??
+        getWrappedTextLines(line, font, maxWidth)
+          .map((wrappedLine) => wrappedLine.text)
+          .join("\n"),
+    )
+    .join("\n");
+};
+
+/**
+ * A list item's marker and the whitespace after it: `• `, `- `, `1. `,
+ * `a) `, `(iv) `… (see `getListLineMarker`), with any indentation.
+ */
+const LIST_ITEM_PREFIX_REGEX =
+  /^\s*(?:[•◦▪*-]|\(?(?:\d{1,3}|[a-zA-Z]|[ivxlc]{1,7})[.)])\s+(?=\S)/;
+
+/**
+ * Wraps a list item with a hanging indent: its wrapped lines start below its
+ * text, not below its marker.
+ *
+ * The indent is made of spaces, so it's only in the wrapped text (`text`), not
+ * in `originalText`. (The text editor wraps on its own, without it.)
+ *
+ * @returns null if the line isn't a list item, or doesn't need wrapping
+ */
+const wrapListItem = (
+  line: string,
+  font: FontString,
+  maxWidth: number,
+): string | null => {
+  const prefix = line.match(LIST_ITEM_PREFIX_REGEX)?.[0];
+  if (
+    !prefix ||
+    !Number.isFinite(maxWidth) ||
+    getLineWidth(line, font) <= maxWidth
+  ) {
+    return null;
+  }
+
+  const prefixWidth = getLineWidth(prefix, font);
+  const spaceWidth = charWidth.calculate(" ", font);
+  // too narrow to leave the text room next to the indent
+  if (!spaceWidth || prefixWidth > maxWidth / 2) {
+    return null;
+  }
+
+  const indent = " ".repeat(Math.round(prefixWidth / spaceWidth));
+  const contentMaxWidth =
+    maxWidth - Math.max(prefixWidth, getLineWidth(indent, font));
+
+  return getWrappedTextLines(line.slice(prefix.length), font, contentMaxWidth)
+    .map((wrappedLine, index) => (index ? indent : prefix) + wrappedLine.text)
     .join("\n");
 };
 
