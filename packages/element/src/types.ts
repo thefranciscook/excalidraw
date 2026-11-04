@@ -288,7 +288,26 @@ export type ExcalidrawTextElement = _ExcalidrawElementBase &
      * so it survives midpoint insertion and other geometry changes.
      * */
     labelPosition?: number | null;
+    /**
+     * Bold / italic / underline formatting of parts of the text, as ranges of
+     * `originalText` offsets (UTF-16 code units). Always normalized: sorted,
+     * non-overlapping, non-empty, adjacent identical ranges merged. Absent
+     * when the text has no formatting.
+     */
+    textStyles?: readonly TextStyleRange[];
   }>;
+
+export type TextStyle = "bold" | "italic" | "underline";
+
+export type TextStyleRange = Readonly<{
+  /** inclusive `originalText` offset */
+  start: number;
+  /** exclusive `originalText` offset */
+  end: number;
+  bold?: true;
+  italic?: true;
+  underline?: true;
+}>;
 
 export type ExcalidrawBindableElement =
   | ExcalidrawRectangleElement

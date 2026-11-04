@@ -63,7 +63,7 @@ import {
 } from "@excalidraw/element";
 import { getBoundTextElement, getContainerElement } from "@excalidraw/element";
 import { isStickyNoteElement } from "@excalidraw/element";
-import { detectLineHeight } from "@excalidraw/element";
+import { detectLineHeight, normalizeTextStyles } from "@excalidraw/element";
 import {
   isArrowBoundToElement,
   isArrowElement,
@@ -580,7 +580,16 @@ export const restoreElement = (
         baseFontSize: isFiniteNumber(element.baseFontSize)
           ? normalizeStickyNoteFontSize(element.baseFontSize)
           : null,
+        textStyles: normalizeTextStyles(
+          element.textStyles,
+          (element.originalText || text).length,
+        ),
       });
+
+      // omit the field for unformatted text
+      if (!element.textStyles) {
+        delete (element as { textStyles?: unknown }).textStyles;
+      }
 
       // if empty text, mark as deleted. We keep in array
       // for data integrity purposes (collab etc.)

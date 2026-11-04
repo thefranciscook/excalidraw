@@ -146,6 +146,12 @@ body.excalidraw-cursor-resize * {
     > textarea {
       pointer-events: auto;
     }
+
+    // formatted text shows in the mirror underneath the (glyph-less)
+    // textarea: keep its selection see-through (see textWysiwyg)
+    > .excalidraw-wysiwyg-mirror ~ textarea::selection {
+      background-color: rgba(105, 101, 219, 0.3);
+    }
   }
 
   &__embeddable {

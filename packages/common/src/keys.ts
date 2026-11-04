@@ -18,9 +18,12 @@ export const CODES = {
   QUOTE: "Quote",
   ZERO: "Digit0",
   SLASH: "Slash",
+  B: "KeyB",
   C: "KeyC",
   D: "KeyD",
   H: "KeyH",
+  I: "KeyI",
+  U: "KeyU",
   V: "KeyV",
   Z: "KeyZ",
   Y: "KeyY",
@@ -68,6 +71,7 @@ export const KEYS = {
   R: "r",
   S: "s",
   T: "t",
+  U: "u",
   V: "v",
   X: "x",
   Y: "y",
@@ -135,6 +139,32 @@ export const matchKey = (
   // non-latin layouts fallback to code
   const code = KeyCodeMap.get(key);
   return Boolean(code && !isLatinChar(event.key) && event.code === code);
+};
+
+/**
+ * The text formatting shortcut (CtrlOrCmd+B / I / U, without Shift or Alt)
+ * of a key event, if any. Falls back to key codes on non-latin layouts.
+ */
+export const getTextStyleShortcut = (
+  event: KeyboardEvent | React.KeyboardEvent<Element>,
+): "bold" | "italic" | "underline" | null => {
+  if (!event[KEYS.CTRL_OR_CMD] || event.shiftKey || event.altKey) {
+    return null;
+  }
+
+  const key = event.key.toLowerCase();
+  const useCode = !isLatinChar(key);
+
+  if (key === KEYS.B || (useCode && event.code === CODES.B)) {
+    return "bold";
+  }
+  if (key === KEYS.I || (useCode && event.code === CODES.I)) {
+    return "italic";
+  }
+  if (key === KEYS.U || (useCode && event.code === CODES.U)) {
+    return "underline";
+  }
+  return null;
 };
 
 export const isArrowKey = (key: string) =>

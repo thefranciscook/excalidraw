@@ -98,6 +98,7 @@ export * from "./store";
 export * from "./stickyNote";
 export * from "./textElement";
 export * from "./textMeasurements";
+export * from "./textStyles";
 export * from "./textWrapping";
 export * from "./transform";
 export * from "./transformHandles";

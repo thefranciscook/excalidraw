@@ -58,6 +58,12 @@ import {
 } from "./textElement";
 import { getLineHeightInPx } from "./textMeasurements";
 import {
+  BOLD_STROKE_RATIO,
+  getStyledLines,
+  getUnderlineMetrics,
+  isStyledLine,
+} from "./textStyles";
+import {
   isTextElement,
   isLinearElement,
   isFreeDrawElement,
@@ -78,6 +84,7 @@ import {
   type StickyNotePathCommand,
 } from "./stickyNote";
 
+import type { StyledRun } from "./textStyles";
 import type {
   ExcalidrawElement,
   ExcalidrawTextElement,
@@ -661,7 +668,21 @@ const drawElementOnCanvas = (
           lineHeightPx,
         );
 
+        // formatted runs (bidi text is drawn as a whole, unformatted)
+        const styledLines = rtl ? null : getStyledLines(element);
+
         for (let index = 0; index < lines.length; index++) {
+          const runs = styledLines?.[index];
+          if (runs && isStyledLine(runs)) {
+            drawStyledTextLine(
+              context,
+              runs,
+              element,
+              horizontalOffset,
+              index * lineHeightPx + verticalOffset,
+            );
+            continue;
+          }
           context.fillText(
             lines[index],
             horizontalOffset,
@@ -677,6 +698,62 @@ const drawElementOnCanvas = (
       }
     }
   }
+};
+
+/**
+ * Draws a line of formatted runs, positioned as `fillText` would position
+ * the whole line with the element's alignment. All formatting keeps glyph
+ * advances, so the runs sit exactly where the plain line's glyphs would.
+ */
+const drawStyledTextLine = (
+  context: CanvasRenderingContext2D,
+  runs: readonly StyledRun[],
+  element: ExcalidrawTextElement,
+  alignOffset: number,
+  y: number,
+) => {
+  const font = context.font;
+  const lineText = runs.map((run) => run.text).join("");
+  const lineWidth = context.measureText(lineText).width;
+  const startX =
+    element.textAlign === "center"
+      ? alignOffset - lineWidth / 2
+      : element.textAlign === "right"
+      ? alignOffset - lineWidth
+      : alignOffset;
+  const { offset: underlineOffset, thickness: underlineThickness } =
+    getUnderlineMetrics(element.fontSize);
+
+  context.save();
+  context.textAlign = "left";
+  context.strokeStyle = context.fillStyle;
+  context.lineWidth = element.fontSize * BOLD_STROKE_RATIO;
+  context.lineJoin = "round";
+
+  let prefix = "";
+  for (const run of runs) {
+    // measure with the regular font, as the line was laid out
+    context.font = font;
+    const x = startX + (prefix ? context.measureText(prefix).width : 0);
+    const nextPrefix = prefix + run.text;
+
+    if (run.underline) {
+      const endX = startX + context.measureText(nextPrefix).width;
+      context.fillRect(x, y + underlineOffset, endX - x, underlineThickness);
+    }
+
+    if (run.italic) {
+      context.font = `italic ${font}`;
+    }
+    if (run.bold) {
+      context.strokeText(run.text, x, y);
+    }
+    context.fillText(run.text, x, y);
+
+    prefix = nextPrefix;
+  }
+
+  context.restore();
 };
 
 export const elementWithCanvasCache = new WeakMap<
