@@ -201,6 +201,13 @@ if (window.self !== window.top) {
   }
 }
 
+// stable reference, so that it doesn't bust the <Excalidraw> memo
+const GOOGLE_FONTS_CONFIG = {
+  cssBaseUrl:
+    import.meta.env.VITE_APP_GOOGLE_FONTS_CSS_URL ||
+    "https://fonts.googleapis.com",
+};
+
 const shareableLinkConfirmDialog = {
   title: t("overwriteConfirm.modal.shareableLink.title"),
   description: (
@@ -953,6 +960,7 @@ const ExcalidrawWrapper = () => {
         initialData={initialStatePromiseRef.current.promise}
         isCollaborating={isCollaborating}
         onPointerUpdate={collabAPI?.onPointerUpdate}
+        googleFonts={GOOGLE_FONTS_CONFIG}
         UIOptions={{
           canvasActions: {
             toggleTheme: true,

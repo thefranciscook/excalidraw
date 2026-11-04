@@ -4977,6 +4977,7 @@ class App extends React.Component<AppProps, AppState> {
 
       if (elements) {
         this.scene.replaceAllElements(elements);
+        this.fonts.loadMissingDynamicFonts(elements);
       }
 
       if (collaborators) {

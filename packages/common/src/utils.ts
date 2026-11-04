@@ -19,6 +19,11 @@ import {
   getFontFamilyFallbacks,
   WINDOWS_EMOJI_FALLBACK_FONT,
 } from "./constants";
+import {
+  getRuntimeFont,
+  getRuntimeFontGenericFamily,
+  quoteFontFamilyName,
+} from "./font-registry";
 
 import type { MaybePromise, ResolutionType } from "./utility-types";
 
@@ -132,6 +137,16 @@ export const getFontFamilyString = ({
         .join("")}`;
     }
   }
+
+  const runtimeFont = getRuntimeFont(fontFamily);
+  if (runtimeFont) {
+    return `${quoteFontFamilyName(
+      runtimeFont.name,
+    )}, ${getRuntimeFontGenericFamily(
+      runtimeFont.category,
+    )}, ${WINDOWS_EMOJI_FALLBACK_FONT}`;
+  }
+
   return WINDOWS_EMOJI_FALLBACK_FONT;
 };
 

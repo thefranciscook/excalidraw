@@ -587,6 +587,8 @@ export interface AppState {
   /** user-customized font-picker top picks (pinned via drag & drop from the
    * font picker popup). `null` means no customization (defaults are used) */
   fontTopPicks: readonly FontFamilyValues[] | null;
+  /** recently used runtime (Google) fonts, most recent first */
+  recentFontFamilies: readonly FontFamilyValues[] | null;
 }
 
 export type SearchMatch = {
@@ -1046,6 +1048,16 @@ export interface ExcalidrawProps {
   ) => JSX.Element | null;
   aiEnabled?: boolean;
   showDeprecatedFonts?: boolean;
+  /**
+   * Enables browsing & using any Google Fonts family from the font picker.
+   * Fonts are fetched at runtime (only when used) from the Google Fonts CSS API
+   * (or a compatible `cssBaseUrl`, i.e. a self-hosted proxy or a mirror).
+   *
+   * The setting is global (shared across all editor instances on the page).
+   *
+   * @default false
+   */
+  googleFonts?: boolean | { cssBaseUrl?: string };
   renderScrollbars?: boolean;
   viewportStatusFrame?: ViewportStatusFrame | null;
   /**

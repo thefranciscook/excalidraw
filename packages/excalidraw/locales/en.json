@@ -738,7 +738,24 @@
     "availableFonts": "Available fonts",
     "empty": "No fonts found",
     "topPicksTip": "Tip: drag any font onto your top picks to pin it",
-    "resetTopPicks": "Reset to default top picks"
+    "resetTopPicks": "Reset to default top picks",
+    "recentFonts": "Recently used",
+    "moreFonts": "More fonts…",
+    "googleFonts": "Google Fonts",
+    "back": "Back to font list",
+    "loading": "Loading fonts…",
+    "loadError": "Couldn't load fonts. Check your connection and try again.",
+    "fontLoadError": "Couldn't load \"{{name}}\"",
+    "showMore": "Show more",
+    "retry": "Retry",
+    "category": {
+      "all": "All",
+      "sans-serif": "Sans",
+      "serif": "Serif",
+      "display": "Display",
+      "handwriting": "Handwriting",
+      "monospace": "Mono"
+    }
   },
   "userList": {
     "empty": "No users found",

@@ -95,6 +95,7 @@ exports[`exportToSvg > with default arguments 1`] = `
     "type": "selection",
   },
   "previousSelectedElementIds": {},
+  "recentFontFamilies": null,
   "resizingElement": null,
   "scrollConstraints": null,
   "scrollX": 0,

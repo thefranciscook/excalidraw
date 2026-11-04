@@ -10,6 +10,9 @@ import {
   DEFAULT_FONT_FAMILY,
   DEFAULT_FONT_SIZE,
   FONT_FAMILY,
+  getRuntimeFont,
+  isGoogleFontFamily,
+  RECENT_FONTS_LIMIT,
   ROUNDNESS,
   STROKE_WIDTH_KEYS,
   VERTICAL_ALIGN,
@@ -1147,6 +1150,7 @@ type ChangeFontFamilyData = Partial<
     | "currentItemFontFamily"
     | "currentHoveredFontFamily"
     | "fontTopPicks"
+    | "recentFontFamilies"
   >
 > & {
   /** cache of selected & editing elements populated on opened popup */
@@ -1247,6 +1251,16 @@ export const actionChangeFontFamily = register<{
       captureUpdate: nextCaptureUpdateAction,
     };
 
+    // keep the picked runtime (Google) fonts around in the font picker
+    if (currentItemFontFamily && isGoogleFontFamily(currentItemFontFamily)) {
+      result.appState.recentFontFamilies = [
+        currentItemFontFamily,
+        ...(appState.recentFontFamilies ?? []).filter(
+          (fontFamily) => fontFamily !== currentItemFontFamily,
+        ),
+      ].slice(0, RECENT_FONTS_LIMIT);
+    }
+
     if (nextFontFamily && !skipOnHoverRender) {
       const elementContainerMapping = new Map<
         ExcalidrawTextElement,
@@ -1256,9 +1270,10 @@ export const actionChangeFontFamily = register<{
       let skipFontFaceCheck = false;
 
       const fontsCache = Array.from(Fonts.loadedFontsCache.values());
-      const fontFamily = Object.entries(FONT_FAMILY).find(
-        ([_, value]) => value === nextFontFamily,
-      )?.[0];
+      const fontFamily =
+        Object.entries(FONT_FAMILY).find(
+          ([_, value]) => value === nextFontFamily,
+        )?.[0] ?? getRuntimeFont(nextFontFamily)?.name;
 
       // skip `document.font.check` check on hover, if at least one font family has loaded as it's super slow (could result in slightly different bbox, which is fine)
       if (
