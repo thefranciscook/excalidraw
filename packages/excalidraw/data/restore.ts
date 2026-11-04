@@ -17,6 +17,8 @@ import {
   FONT_FAMILY,
   FONT_METADATA,
   FONT_TOP_PICKS_SLOTS,
+  RECENT_FONTS_LIMIT,
+  isGoogleFontFamily,
   ROUNDNESS,
   DEFAULT_SIDEBAR,
   DEFAULT_ELEMENT_PROPS,
@@ -1237,14 +1239,36 @@ const restoreFontTopPicks = (
   }
   const fontFamilies = new Set<FontFamilyValues>();
   for (const fontFamily of value) {
-    const metadata =
-      typeof fontFamily === "number" ? FONT_METADATA[fontFamily] : undefined;
-    // only families the font picker lists (no internal or fallback fonts)
-    if (!metadata || metadata.private || metadata.fallback) {
-      continue;
+    // runtime (Google) fonts can be pinned too
+    if (!isGoogleFontFamily(fontFamily)) {
+      const metadata =
+        typeof fontFamily === "number" ? FONT_METADATA[fontFamily] : undefined;
+      // only families the font picker lists (no internal or fallback fonts)
+      if (!metadata || metadata.private || metadata.fallback) {
+        continue;
+      }
     }
     fontFamilies.add(fontFamily as FontFamilyValues);
     if (fontFamilies.size >= FONT_TOP_PICKS_SLOTS) {
+      break;
+    }
+  }
+  return fontFamilies.size ? [...fontFamilies] : null;
+};
+
+export const restoreRecentFonts = (
+  value: unknown,
+): readonly FontFamilyValues[] | null => {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+  const fontFamilies = new Set<FontFamilyValues>();
+  for (const fontFamily of value) {
+    if (!isGoogleFontFamily(fontFamily)) {
+      continue;
+    }
+    fontFamilies.add(fontFamily as FontFamilyValues);
+    if (fontFamilies.size >= RECENT_FONTS_LIMIT) {
       break;
     }
   }
@@ -1316,6 +1340,9 @@ export const restoreAppState = (
     ),
   };
   nextAppState.fontTopPicks = restoreFontTopPicks(nextAppState.fontTopPicks);
+  nextAppState.recentFontFamilies = restoreRecentFonts(
+    nextAppState.recentFontFamilies,
+  );
 
   // legacy
   if ((appState as any).currentItemStrokeWidth !== undefined) {

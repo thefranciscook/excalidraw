@@ -46,7 +46,9 @@ export class ExcalidrawFontFace {
 
     return this.getContent(codepoints).then(
       (content) =>
-        `@font-face { font-family: ${this.fontFace.family}; src: url(${content}); }`,
+        `@font-face { font-family: ${ExcalidrawFontFace.toCSSFamilyName(
+          this.fontFace.family,
+        )}; src: url(${content}); }`,
     );
   }
 
@@ -167,6 +169,21 @@ export class ExcalidrawFontFace {
     urls.push(new URL(assetUrl, ExcalidrawFontFace.ASSETS_FALLBACK_URL));
 
     return urls;
+  }
+
+  /**
+   * Keeps the family name as is when it's a valid sequence of CSS identifiers
+   * (i.e. `Lilita One`), quotes it otherwise (i.e. `Noto Sans Symbols 2`).
+   */
+  private static toCSSFamilyName(family: string) {
+    if (
+      /^["']/.test(family) ||
+      /^-?[A-Za-z_][\w-]*( -?[A-Za-z_][\w-]*)*$/.test(family)
+    ) {
+      return family;
+    }
+
+    return `"${family.replace(/["\\]/g, "")}"`;
   }
 
   private static getFormat(url: URL | DataURL) {

@@ -1,4 +1,4 @@
-import { FONT_FAMILY, KEYS } from "@excalidraw/common";
+import { FONT_FAMILY, GOOGLE_FONTS_ID_OFFSET, KEYS } from "@excalidraw/common";
 
 import { Excalidraw } from "../..";
 import { API } from "../../tests/helpers/api";
@@ -219,6 +219,87 @@ describe("FontPicker", () => {
       expect(h.state.fontTopPicks).toBe(null);
       expect(h.state.openPopup).toBe("fontFamily");
       await waitFor(() => expect(getResetLink()).toBe(null));
+    });
+  });
+
+  describe("Google Fonts", () => {
+    // "Roboto Mono" in the catalog
+    const ROBOTO_MONO = GOOGLE_FONTS_ID_OFFSET + 5;
+
+    const CSS2 = `@font-face {
+  font-family: 'Roboto Mono';
+  font-style: normal;
+  font-weight: 400;
+  src: url(https://fonts.gstatic.com/s/robotomono/v1/latin.woff2) format('woff2');
+  unicode-range: U+0000-00FF;
+}`;
+
+    beforeEach(() => {
+      // re-arm the global `document.fonts` mocks (reset by `restoreAllMocks`)
+      vi.mocked(document.fonts.load).mockResolvedValue([]);
+      vi.mocked(document.fonts.check).mockReturnValue(true);
+
+      vi.spyOn(window, "fetch").mockImplementation(async (input) => {
+        if (String(input).includes("/css2?family=")) {
+          return new Response(CSS2, { status: 200 });
+        }
+        throw new Error(`unexpected fetch ${input}`);
+      });
+    });
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    const openPickerWithText = async (googleFonts: boolean) => {
+      const utils = await render(
+        <Excalidraw handleKeyboardGlobally={true} googleFonts={googleFonts} />,
+      );
+      const text = API.createElement({ type: "text", text: "hello" });
+      API.setElements([text]);
+      API.setSelectedElements([text]);
+
+      act(() => {
+        utils.getByTestId("font-family-show-fonts").click();
+      });
+
+      return { ...utils, text };
+    };
+
+    it("hides the Google Fonts browser when disabled", async () => {
+      const { queryByTestId } = await openPickerWithText(false);
+
+      expect(h.state.openPopup).toBe("fontFamily");
+      expect(queryByTestId("font-picker-more-fonts")).toBe(null);
+    });
+
+    it("picks a Google font from the browser & keeps it as recently used", async () => {
+      const { getByTestId, findByTestId, container, text } =
+        await openPickerWithText(true);
+
+      act(() => {
+        getByTestId("font-picker-more-fonts").click();
+      });
+
+      const input = container.querySelector(
+        ".GoogleFontsBrowser .QuickSearch__input",
+      ) as HTMLInputElement;
+      fireEvent.change(input, { target: { value: "roboto mono" } });
+
+      const row = await findByTestId(`google-font-${ROBOTO_MONO}`);
+      expect(row.textContent).toContain("Roboto Mono");
+
+      act(() => {
+        row.click();
+      });
+
+      await waitFor(() =>
+        expect(API.getElement(text).fontFamily).toBe(ROBOTO_MONO),
+      );
+      expect(h.state.recentFontFamilies).toEqual([ROBOTO_MONO]);
+      expect(window.fetch).toHaveBeenCalledWith(
+        "https://fonts.googleapis.com/css2?family=Roboto+Mono&display=swap",
+      );
     });
   });
 });

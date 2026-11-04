@@ -4,6 +4,7 @@ import type {
 } from "@excalidraw/element/types";
 
 import { FONT_FAMILY, FONT_FAMILY_FALLBACKS } from "./constants";
+import { getRuntimeFont } from "./font-registry";
 
 /**
  * Encapsulates font metrics with additional font metadata.
@@ -30,6 +31,8 @@ export interface FontMetadata {
   local?: true;
   /** flag to indicate a fallback font */
   fallback?: true;
+  /** flag to indicate a font loaded at runtime (i.e. Google Fonts) */
+  dynamic?: true;
 }
 
 export const FONT_METADATA: Record<number, FontMetadata> = {
@@ -150,6 +153,15 @@ export const GOOGLE_FONTS_RANGES = {
 export const LOCAL_FONT_PROTOCOL = "local:";
 
 /**
+ * Retrieves metadata for bundled fonts, as well as for runtime-registered
+ * fonts (i.e. Google Fonts). Defaults to Excalifont metadata.
+ */
+export const getFontMetadata = (fontFamily: number): FontMetadata =>
+  FONT_METADATA[fontFamily] ??
+  getRuntimeFont(fontFamily)?.metadata ??
+  FONT_METADATA[FONT_FAMILY.Excalifont];
+
+/**
  * Calculates vertical offset for a text with alphabetic baseline.
  */
 export const getVerticalOffset = (
@@ -158,8 +170,7 @@ export const getVerticalOffset = (
   lineHeightPx: number,
 ) => {
   const { unitsPerEm, ascender, descender } =
-    FONT_METADATA[fontFamily]?.metrics ||
-    FONT_METADATA[FONT_FAMILY.Excalifont].metrics;
+    getFontMetadata(fontFamily).metrics;
 
   const fontSizeEm = fontSize / unitsPerEm;
   const lineGap =
@@ -173,9 +184,7 @@ export const getVerticalOffset = (
  * Gets line height for a selected family.
  */
 export const getLineHeight = (fontFamily: FontFamilyValues) => {
-  const { lineHeight } =
-    FONT_METADATA[fontFamily]?.metrics ||
-    FONT_METADATA[FONT_FAMILY.Excalifont].metrics;
+  const { lineHeight } = getFontMetadata(fontFamily).metrics;
 
   return lineHeight as ExcalidrawTextElement["lineHeight"];
 };

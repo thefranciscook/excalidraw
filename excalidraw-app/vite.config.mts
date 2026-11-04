@@ -124,6 +124,11 @@ export default defineConfig(({ mode }) => {
             if (id.includes("@codemirror/") || id.includes("@lezer/")) {
               return "codemirror.chunk";
             }
+
+            // lazy loaded, runtime-cached instead of precached
+            if (id.includes("fonts/GoogleFonts/catalog.json")) {
+              return "google-fonts-catalog.chunk";
+            }
           },
         },
       },
@@ -175,6 +180,36 @@ export default defineConfig(({ mode }) => {
             "**/CodeMirrorEditor-*.js",
           ],
           runtimeCaching: [
+            {
+              // Google Fonts (or compatible) CSS API responses
+              urlPattern: new RegExp("/css2\\?family="),
+              handler: "StaleWhileRevalidate",
+              options: {
+                cacheName: "google-fonts-css",
+                expiration: {
+                  maxEntries: 500,
+                  maxAgeSeconds: 60 * 60 * 24 * 30, // 30 days
+                },
+                cacheableResponse: {
+                  statuses: [0, 200],
+                },
+              },
+            },
+            {
+              // font name previews (Google Fonts `text=` subsets)
+              urlPattern: new RegExp("fonts\\.gstatic\\.com/l/font"),
+              handler: "CacheFirst",
+              options: {
+                cacheName: "google-fonts-previews",
+                expiration: {
+                  maxEntries: 500,
+                  maxAgeSeconds: 60 * 60 * 24 * 90, // 90 days
+                },
+                cacheableResponse: {
+                  statuses: [0, 200],
+                },
+              },
+            },
             {
               urlPattern: new RegExp(".+.woff2"),
               handler: "CacheFirst",

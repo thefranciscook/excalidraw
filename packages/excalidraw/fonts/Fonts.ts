@@ -5,6 +5,11 @@ import {
   WINDOWS_EMOJI_FALLBACK_FONT,
   getFontFamilyFallbacks,
   FONT_SIZES,
+  isGoogleFontFamily,
+  registerRuntimeFont,
+  getRuntimeFont,
+  updateRuntimeFontMetrics,
+  quoteFontFamilyName,
 } from "@excalidraw/common";
 import { getContainerElement } from "@excalidraw/element";
 import { charWidth } from "@excalidraw/element";
@@ -36,6 +41,13 @@ import { ComicShannsFontFaces } from "./ComicShanns";
 import { EmojiFontFaces } from "./Emoji";
 import { ExcalidrawFontFace } from "./ExcalidrawFontFace";
 import { ExcalifontFontFaces } from "./Excalifont";
+import {
+  fetchGoogleFontDescriptors,
+  getGoogleFontInfoAsync,
+  getGoogleFontMetadata,
+  getGoogleFontsConfig,
+  measureGoogleFontMetrics,
+} from "./GoogleFonts";
 import { HelveticaFontFaces } from "./Helvetica";
 import { LiberationFontFaces } from "./Liberation";
 import { LilitaFontFaces } from "./Lilita";
@@ -59,6 +71,15 @@ export class Fonts {
     | undefined;
 
   private static _initialized: boolean = false;
+
+  /** in-flight / settled registrations of runtime (Google) fonts */
+  private static readonly dynamicFonts = new Map<number, Promise<boolean>>();
+
+  /**
+   * set when metrics of a runtime font got measured, so that the next
+   * `onLoaded` invalidates the text elements even if no new font face loaded
+   */
+  private static metricsChanged = false;
 
   public static get registered() {
     // lazy load the font registration
@@ -119,6 +140,11 @@ export class Fonts {
       }
     }
 
+    if (Fonts.metricsChanged) {
+      Fonts.metricsChanged = false;
+      shouldBail = false;
+    }
+
     if (shouldBail) {
       return;
     }
@@ -152,6 +178,7 @@ export class Fonts {
    */
   public loadSceneFonts = async (): Promise<FontFace[]> => {
     const sceneFamilies = this.getSceneFamilies();
+    await Fonts.ensureDynamicFonts(sceneFamilies, this.ownerDocument);
     const charsPerFamily = Fonts.getCharsPerFamily(
       this.scene.getNonDeletedElements(),
     );
@@ -164,6 +191,31 @@ export class Fonts {
   };
 
   /**
+   * Loads runtime (Google) fonts used by the passed elements which haven't
+   * been requested yet (i.e. elements received from collaborators), and
+   * re-renders once loaded. Cheap no-op otherwise.
+   */
+  public loadMissingDynamicFonts = (
+    elements: readonly ExcalidrawElement[],
+  ): void => {
+    if (!getGoogleFontsConfig().enabled) {
+      return;
+    }
+
+    const hasMissing = elements.some(
+      (element) =>
+        isTextElement(element) &&
+        !element.isDeleted &&
+        isGoogleFontFamily(element.fontFamily) &&
+        !Fonts.dynamicFonts.has(element.fontFamily),
+    );
+
+    if (hasMissing) {
+      this.loadSceneFonts().then(this.onLoaded);
+    }
+  };
+
+  /**
    * Load font faces for passed elements - use when the scene is unavailable (i.e. export).
    */
   public static loadElementsFonts = async (
@@ -172,6 +224,8 @@ export class Fonts {
   ): Promise<FontFace[]> => {
     const fontFamilies = Fonts.getUniqueFamilies(elements);
     const charsPerFamily = Fonts.getCharsPerFamily(elements);
+
+    await Fonts.ensureDynamicFonts(fontFamilies, ownerDocument);
 
     return Fonts.loadFontFaces(fontFamilies, charsPerFamily, ownerDocument);
   };
@@ -184,6 +238,8 @@ export class Fonts {
   ) {
     const families = Fonts.getUniqueFamilies(elements);
     const charsPerFamily = Fonts.getCharsPerFamily(elements);
+
+    await Fonts.ensureDynamicFonts(families);
 
     // for simplicity, assuming we have just one family with the CJK handdrawn fallback
     const familyWithCJK = families.find((x) =>
@@ -327,6 +383,146 @@ export class Fonts {
         });
       }
     }
+  }
+
+  /**
+   * Makes sure the runtime (Google) fonts among the passed families are
+   * registered and their font faces added into the document, so that they
+   * can be loaded, rendered and inlined like the bundled fonts.
+   *
+   * No-op for bundled fonts, or when Google Fonts are disabled.
+   *
+   * @returns whether all the passed runtime fonts are available
+   */
+  public static async ensureDynamicFonts(
+    fontFamilies: readonly number[],
+    ownerDocument: Document = document,
+  ): Promise<boolean> {
+    const results = await Promise.all(
+      fontFamilies
+        .filter((fontFamily) => isGoogleFontFamily(fontFamily))
+        .map((fontFamily) =>
+          Fonts.ensureDynamicFont(fontFamily, ownerDocument),
+        ),
+    );
+
+    return results.every(Boolean);
+  }
+
+  private static ensureDynamicFont(
+    fontFamily: number,
+    ownerDocument: Document,
+  ): Promise<boolean> {
+    const existing = Fonts.dynamicFonts.get(fontFamily);
+
+    if (existing) {
+      return existing.then((registered) => {
+        // make sure the font faces are part of this document too
+        if (registered) {
+          Fonts.addFontFacesToDocument(fontFamily, ownerDocument);
+        }
+        return registered;
+      });
+    }
+
+    if (!getGoogleFontsConfig().enabled) {
+      return Promise.resolve(false);
+    }
+
+    const promise = promiseTry(async () => {
+      const info = await getGoogleFontInfoAsync(fontFamily);
+
+      if (!info) {
+        // unknown id, could come from a newer catalog
+        return false;
+      }
+
+      const metadata: FontMetadata = {
+        ...getGoogleFontMetadata(info),
+        dynamic: true,
+      };
+
+      registerRuntimeFont(fontFamily, {
+        name: info.name,
+        category: info.category,
+        metadata,
+      });
+
+      const descriptors = await fetchGoogleFontDescriptors(info.name);
+
+      Fonts.registerDynamic(fontFamily, info.name, metadata, descriptors);
+      Fonts.addFontFacesToDocument(fontFamily, ownerDocument);
+
+      try {
+        // load the font face covering the space glyph (typically latin),
+        // which is the "first available font" used for the font metrics
+        await ownerDocument.fonts.load(
+          `${FONT_SIZES.sm}px ${quoteFontFamilyName(info.name)}`,
+          " ",
+        );
+
+        const metrics = measureGoogleFontMetrics(info.name, ownerDocument);
+
+        if (metrics) {
+          const current = getRuntimeFont(fontFamily)?.metadata.metrics;
+          if (
+            current?.ascender !== metrics.ascender ||
+            current?.descender !== metrics.descender
+          ) {
+            updateRuntimeFontMetrics(fontFamily, metrics);
+            Fonts.metricsChanged = true;
+          }
+        }
+      } catch (error) {
+        // keep the default metrics
+        console.warn(`Couldn't measure metrics of "${info.name}"`, error);
+      }
+
+      return true;
+    }).catch((error) => {
+      console.error(error);
+      // allow retrying later (i.e. when offline)
+      Fonts.dynamicFonts.delete(fontFamily);
+      return false;
+    });
+
+    Fonts.dynamicFonts.set(fontFamily, promise);
+
+    return promise;
+  }
+
+  private static addFontFacesToDocument(
+    fontFamily: number,
+    ownerDocument: Document,
+  ) {
+    for (const { fontFace } of Fonts.registered.get(fontFamily)?.fontFaces ??
+      []) {
+      if (!ownerDocument.fonts.has(fontFace)) {
+        ownerDocument.fonts.add(fontFace);
+      }
+    }
+  }
+
+  /**
+   * Register a font loaded at runtime under the given (numeric) font family id.
+   */
+  public static registerDynamic(
+    fontFamily: number,
+    family: string,
+    metadata: FontMetadata,
+    fontFacesDescriptors: readonly ExcalidrawFontFaceDescriptor[],
+  ) {
+    if (!Fonts.registered.has(fontFamily)) {
+      Fonts.registered.set(fontFamily, {
+        metadata,
+        fontFaces: fontFacesDescriptors.map(
+          ({ uri, descriptors }) =>
+            new ExcalidrawFontFace(family, uri, descriptors),
+        ),
+      });
+    }
+
+    return Fonts.registered.get(fontFamily)!;
   }
 
   /**

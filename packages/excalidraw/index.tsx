@@ -19,6 +19,7 @@ import App, {
   ExcalidrawAPISetContext,
 } from "./components/App";
 import { InitializeApp } from "./components/InitializeApp";
+import { setGoogleFontsConfig } from "./fonts/GoogleFonts";
 import Footer from "./components/footer/FooterCenter";
 import LiveCollaborationTrigger from "./components/live-collaboration/LiveCollaborationTrigger";
 import MainMenu from "./components/main-menu/MainMenu";
@@ -112,11 +113,16 @@ const ExcalidrawBase = (props: ExcalidrawProps) => {
     renderEmbeddable,
     aiEnabled,
     showDeprecatedFonts,
+    googleFonts,
     renderScrollbars,
     viewportStatusFrame,
     currentUserControls,
     imageOptions,
   } = props;
+
+  // global & idempotent, set synchronously so it applies before the initial
+  // scene fonts get loaded
+  setGoogleFontsConfig(googleFonts);
 
   const canvasActions = props.UIOptions?.canvasActions;
 
