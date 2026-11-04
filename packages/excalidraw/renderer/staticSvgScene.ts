@@ -20,6 +20,11 @@ import { normalizeLink, toValidURL } from "@excalidraw/common";
 import { hashString } from "@excalidraw/element";
 import { getUncroppedWidthAndHeight } from "@excalidraw/element";
 import {
+  BOLD_STROKE_RATIO,
+  getStyledLines,
+  isStyledLine,
+} from "@excalidraw/element";
+import {
   createPlaceholderEmbeddableLabel,
   getEmbedLink,
 } from "@excalidraw/element";
@@ -809,20 +814,49 @@ const renderElementToSvg = (
             : element.textAlign === "right" || direction === "rtl"
             ? "end"
             : "start";
+        const textColor = applyDarkModeFilter(
+          element.strokeColor,
+          renderConfig.theme === THEME.DARK,
+        );
+        // formatted runs (bidi text is exported as a whole, unformatted)
+        const styledLines =
+          direction === "rtl" ? null : getStyledLines(element);
         for (let i = 0; i < lines.length; i++) {
           const text = svgRoot.ownerDocument.createElementNS(SVG_NS, "text");
-          text.textContent = lines[i];
+          const runs = styledLines?.[i];
+          if (runs && isStyledLine(runs)) {
+            for (const run of runs) {
+              const tspan = svgRoot.ownerDocument.createElementNS(
+                SVG_NS,
+                "tspan",
+              );
+              tspan.textContent = run.text;
+              if (run.bold) {
+                // keeps the glyph advances, as on canvas (see textStyles.ts)
+                tspan.setAttribute("stroke", textColor);
+                tspan.setAttribute(
+                  "stroke-width",
+                  `${element.fontSize * BOLD_STROKE_RATIO}`,
+                );
+                tspan.setAttribute("stroke-linejoin", "round");
+                tspan.setAttribute("paint-order", "stroke");
+              }
+              if (run.italic) {
+                tspan.setAttribute("font-style", "italic");
+              }
+              if (run.underline) {
+                tspan.setAttribute("text-decoration", "underline");
+              }
+              text.appendChild(tspan);
+            }
+          } else {
+            text.textContent = lines[i];
+          }
           text.setAttribute("x", `${horizontalOffset}`);
           text.setAttribute("y", `${i * lineHeightPx + verticalOffset}`);
           text.setAttribute("font-family", getFontFamilyString(element));
           text.setAttribute("font-size", `${element.fontSize}px`);
-          text.setAttribute(
-            "fill",
-            applyDarkModeFilter(
-              element.strokeColor,
-              renderConfig.theme === THEME.DARK,
-            ),
-          );
+          text.setAttribute("fill", textColor);
           text.setAttribute("text-anchor", textAnchor);
           text.setAttribute("style", "white-space: pre;");
           text.setAttribute("direction", direction);

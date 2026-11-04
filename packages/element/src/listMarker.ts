@@ -1,5 +1,6 @@
 import { arrayToMap } from "@excalidraw/common";
 
+import { remapTextStyles } from "./textStyles";
 import { refreshTextDimensions } from "./newElement";
 import {
   getBoundTextElement,
@@ -268,13 +269,26 @@ const setText = (
   originalText: string,
   scene: Scene,
 ) => {
+  // keep the formatting on the same characters (the marker changed)
+  const styles = element.textStyles?.length
+    ? {
+        textStyles:
+          remapTextStyles(
+            element.textStyles,
+            element.originalText,
+            originalText,
+          ) ?? [],
+      }
+    : null;
+
   if (container) {
-    scene.mutateElement(element, { originalText });
+    scene.mutateElement(element, { originalText, ...styles });
     // re-wraps the label, and grows the container if need be
     redrawTextBoundingBox(element, container, scene);
   } else {
     scene.mutateElement(element, {
       originalText,
+      ...styles,
       // re-wraps the text, and keeps it anchored as per its alignment
       ...refreshTextDimensions(
         element,

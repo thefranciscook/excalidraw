@@ -12,12 +12,19 @@ import {
   applyDarkModeFilter,
   isRTL,
   hasRTLChars,
+  getTextStyleShortcut,
 } from "@excalidraw/common";
 import { pointFrom, pointRotateRads, type Radians } from "@excalidraw/math";
 
 import {
+  BOLD_STROKE_RATIO,
+  getStyledRuns,
   getTextFromElements,
+  getTextStyleAt,
+  getUnderlineMetrics,
   originalContainerCache,
+  remapTextStyles,
+  toggleTextStyle,
   updateBoundElements,
   updateOriginalContainerCache,
 } from "@excalidraw/element";
@@ -47,6 +54,8 @@ import {
   isStickyNoteElement,
   isTextElement,
 } from "@excalidraw/element";
+
+import type { TextStyleFlags } from "@excalidraw/element";
 
 import type {
   ExcalidrawLinearElement,
@@ -275,8 +284,15 @@ export const textWysiwyg = ({
    * Note: `text`, which can be wrapped and therefore different from `originalText`,
    *       is derived from `originalText`
    */
-  onChange?: (nextOriginalText: string) => void;
-  onSubmit: (data: { viaKeyboard: boolean; nextOriginalText: string }) => void;
+  onChange?: (data: {
+    nextOriginalText: string;
+    textStyles: ExcalidrawTextElement["textStyles"];
+  }) => void;
+  onSubmit: (data: {
+    viaKeyboard: boolean;
+    nextOriginalText: string;
+    textStyles: ExcalidrawTextElement["textStyles"];
+  }) => void;
   getViewportCoords: (x: number, y: number) => [number, number];
   element: ExcalidrawTextElement;
   canvas: HTMLCanvasElement;
@@ -532,6 +548,8 @@ export const textWysiwyg = ({
         editable.style.fontFamily = getFontFamilyString(updatedTextElement);
       }
 
+      syncMirror(updatedTextElement.fontSize);
+
       app.scene.mutateElement(updatedTextElement, { x: coordX, y: coordY });
     }
   };
@@ -573,6 +591,227 @@ export const textWysiwyg = ({
     boxSizing: "content-box",
   });
   editable.value = element.originalText;
+
+  // ---------------------------------------------------------------------------
+  // formatting (bold / italic / underline of parts of the text)
+  // ---------------------------------------------------------------------------
+
+  /** the editor's formatting, the source of truth while editing */
+  let textStyles = element.textStyles;
+  /** the text `textStyles` currently apply to */
+  let styledValue = editable.value;
+  /** formatting for the next characters typed at a collapsed caret */
+  let pendingStyle: { at: number; flags: TextStyleFlags } | null = null;
+  /** selection right before the latest input */
+  let selectionBeforeInput: { start: number; end: number } | null = null;
+
+  /**
+   * Formatting toggles, undone / redone by Ctrl/Cmd+Z / Shift+Z as long as
+   * the text hasn't changed since (text edits use the browser's own undo).
+   */
+  type StyleHistoryEntry = {
+    value: string;
+    before: ExcalidrawTextElement["textStyles"];
+    after: ExcalidrawTextElement["textStyles"];
+  };
+  const styleUndoStack: StyleHistoryEntry[] = [];
+  const styleRedoStack: StyleHistoryEntry[] = [];
+
+  /**
+   * The textarea can't show mixed styles: when the text is formatted, its
+   * glyphs are hidden (its caret & selection stay), and this mirror, laid
+   * out the same, shows the formatted text underneath. All the formatting
+   * keeps glyph advances (see `textStyles.ts`), so both lay out the same.
+   */
+  const mirror = ownerDocument.createElement("div");
+  mirror.classList.add("excalidraw-wysiwyg-mirror");
+  mirror.setAttribute("aria-hidden", "true");
+  mirror.dir = "auto";
+  Object.assign(mirror.style, {
+    position: "absolute",
+    display: "none",
+    margin: 0,
+    padding: 0,
+    border: 0,
+    overflow: "hidden",
+    pointerEvents: "none",
+    userSelect: "none",
+    boxSizing: "content-box",
+    zIndex: "var(--zIndex-wysiwyg)",
+  });
+
+  /** in order: `lineHeight` must come after `font` */
+  const MIRRORED_STYLES = [
+    "font",
+    "fontFamily",
+    "lineHeight",
+    "width",
+    "height",
+    "minHeight",
+    "left",
+    "top",
+    "transformOrigin",
+    "transform",
+    "textAlign",
+    "color",
+    "opacity",
+    "whiteSpace",
+    "wordBreak",
+    "overflowWrap",
+    "backfaceVisibility",
+  ] as const;
+
+  let renderedMirror: {
+    value: string;
+    textStyles: ExcalidrawTextElement["textStyles"];
+    fontSize: number;
+  } | null = null;
+
+  const renderMirrorContent = (fontSize: number) => {
+    const value = editable.value;
+    if (
+      renderedMirror?.value === value &&
+      renderedMirror.textStyles === textStyles &&
+      renderedMirror.fontSize === fontSize
+    ) {
+      return;
+    }
+    renderedMirror = { value, textStyles, fontSize };
+
+    const { thickness } = getUnderlineMetrics(fontSize);
+    mirror.replaceChildren(
+      ...getStyledRuns(value, textStyles).map((run) => {
+        const span = ownerDocument.createElement("span");
+        span.textContent = run.text;
+        span.dataset.textStyle = (["bold", "italic", "underline"] as const)
+          .filter((style) => run[style])
+          .join(" ");
+        if (run.bold) {
+          span.style.setProperty(
+            "-webkit-text-stroke",
+            `${fontSize * BOLD_STROKE_RATIO}px currentColor`,
+          );
+          span.style.setProperty("paint-order", "stroke fill");
+        }
+        if (run.italic) {
+          span.style.fontStyle = "italic";
+        }
+        if (run.underline) {
+          span.style.textDecoration = "underline";
+          span.style.setProperty("text-decoration-thickness", `${thickness}px`);
+          span.style.setProperty("text-decoration-skip-ink", "none");
+        }
+        return span;
+      }),
+      // a trailing line break only takes up a line when followed by something
+      ...(value.endsWith("\n") ? [ownerDocument.createTextNode("\u200b")] : []),
+    );
+  };
+
+  /** shows the mirror (and hides the textarea's glyphs) for formatted text */
+  const syncMirror = (fontSize: number) => {
+    if (!textStyles?.length) {
+      mirror.style.display = "none";
+      editable.style.removeProperty("-webkit-text-fill-color");
+      renderedMirror = null;
+      return;
+    }
+
+    for (const property of MIRRORED_STYLES) {
+      (mirror.style as any)[property] = editable.style[property];
+    }
+    mirror.style.display = "block";
+    editable.style.setProperty("-webkit-text-fill-color", "transparent");
+    renderMirrorContent(fontSize);
+  };
+
+  const getEditedFontSize = () =>
+    app.scene.getElement<ExcalidrawTextElement>(element.id)?.fontSize ??
+    element.fontSize;
+
+  /** applies new formatting (without a text change) */
+  const commitTextStyles = (next: ExcalidrawTextElement["textStyles"]) => {
+    textStyles = next;
+    syncMirror(getEditedFontSize());
+    onChange?.({ nextOriginalText: editable.value, textStyles });
+  };
+
+  /** keeps the formatting on the same characters after a text edit */
+  const remapTextStylesOnInput = () => {
+    const value = editable.value;
+    if (value === styledValue) {
+      return;
+    }
+
+    const insertStyle =
+      pendingStyle &&
+      selectionBeforeInput &&
+      selectionBeforeInput.start === pendingStyle.at &&
+      selectionBeforeInput.end === pendingStyle.at
+        ? pendingStyle.flags
+        : null;
+
+    textStyles = remapTextStyles(
+      textStyles,
+      styledValue,
+      value,
+      editable.selectionEnd,
+      insertStyle,
+    );
+    styledValue = value;
+    pendingStyle = null;
+    styleRedoStack.length = 0;
+  };
+
+  const toggleSelectionStyle = (style: keyof TextStyleFlags) => {
+    const { selectionStart, selectionEnd, value } = editable;
+
+    if (selectionStart === selectionEnd) {
+      // applies to what's typed next at the caret
+      const base =
+        pendingStyle?.at === selectionStart
+          ? pendingStyle.flags
+          : getTextStyleAt(textStyles, Math.max(0, selectionStart - 1));
+      pendingStyle = {
+        at: selectionStart,
+        flags: { ...base, [style]: !base[style] },
+      };
+      return;
+    }
+
+    const before = textStyles;
+    const after = toggleTextStyle(
+      textStyles,
+      selectionStart,
+      selectionEnd,
+      style,
+      value.length,
+    );
+    styleUndoStack.push({ value, before, after });
+    styleRedoStack.length = 0;
+    commitTextStyles(after);
+  };
+
+  /** undoes / redoes the latest formatting toggle, if the text is the same */
+  const undoTextStyle = (isRedo: boolean) => {
+    const stack = isRedo ? styleRedoStack : styleUndoStack;
+    const entry = stack[stack.length - 1];
+    if (!entry || entry.value !== editable.value) {
+      return false;
+    }
+    stack.pop();
+    (isRedo ? styleUndoStack : styleRedoStack).push(entry);
+    commitTextStyles(isRedo ? entry.after : entry.before);
+    return true;
+  };
+
+  editable.addEventListener("beforeinput", () => {
+    selectionBeforeInput = {
+      start: editable.selectionStart,
+      end: editable.selectionEnd,
+    };
+  });
+
   updateWysiwygStyle();
 
   const getCaretIndexFromInitialSceneCoords = () => {
@@ -867,7 +1106,9 @@ export const textWysiwyg = ({
         editable.selectionStart = selectionStart;
         editable.selectionEnd = selectionStart;
       }
-      onChange(editable.value);
+      remapTextStylesOnInput();
+      selectionBeforeInput = null;
+      onChange({ nextOriginalText: editable.value, textStyles });
       // once the update, and any scroll it made (see
       // AppText.handleTextWysiwyg), is in the app's state
       queueMicrotask(followCaretFromUnderPanels);
@@ -875,7 +1116,27 @@ export const textWysiwyg = ({
   }
 
   editable.onkeydown = (event) => {
-    if (!event.shiftKey && actionZoomIn.keyTest(event)) {
+    const textStyleShortcut = getTextStyleShortcut(event);
+    const isUndo =
+      event[KEYS.CTRL_OR_CMD] &&
+      !event.altKey &&
+      event.key.toLowerCase() === KEYS.Z;
+    const isRedo =
+      (isUndo && event.shiftKey) ||
+      (event.ctrlKey &&
+        !event.shiftKey &&
+        !event.altKey &&
+        event.key.toLowerCase() === KEYS.Y);
+
+    if (textStyleShortcut) {
+      // also keeps the browser's own shortcuts (bookmarks, view source) away
+      event.preventDefault();
+      if (!event.isComposing) {
+        toggleSelectionStyle(textStyleShortcut);
+      }
+    } else if ((isUndo || isRedo) && undoTextStyle(isRedo)) {
+      event.preventDefault();
+    } else if (!event.shiftKey && actionZoomIn.keyTest(event)) {
       event.preventDefault();
       app.actionManager.executeAction(actionZoomIn);
       updateWysiwygStyle();
@@ -1140,9 +1401,11 @@ export const textWysiwyg = ({
       redrawTextBoundingBox(updateElement, container, app.scene);
     }
 
+    remapTextStylesOnInput();
     onSubmit({
       viaKeyboard: submittedViaKeyboard,
       nextOriginalText: editable.value,
+      textStyles,
     });
   };
 
@@ -1170,6 +1433,7 @@ export const textWysiwyg = ({
     editorBox?.style.removeProperty("right");
 
     editable.remove();
+    mirror.remove();
   };
 
   const bindBlurEvent = (event?: MouseEvent) => {
@@ -1383,6 +1647,8 @@ export const textWysiwyg = ({
     });
   });
   ownerWindow.addEventListener("beforeunload", handleSubmit);
+  // the mirror goes underneath the textarea (see syncMirror)
+  editorBox!.appendChild(mirror);
   editorBox!.appendChild(editable);
 
   return handleSubmit;

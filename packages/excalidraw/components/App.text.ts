@@ -184,7 +184,12 @@ export class AppText {
   ) {
     const elementsMap = this.app.scene.getElementsMapIncludingDeleted();
 
-    const updateElement = (nextOriginalText: string, isDeleted: boolean) => {
+    const updateElement = (
+      nextOriginalText: string,
+      isDeleted: boolean,
+      /** the editor's formatting (keeps the element's when not passed) */
+      textStyles?: { value: ExcalidrawTextElement["textStyles"] },
+    ) => {
       const latestTextElement =
         this.app.scene.getElement<ExcalidrawTextElement>(element.id);
 
@@ -222,6 +227,11 @@ export class AppText {
             return newElementWith(_element, {
               originalText: nextOriginalText,
               isDeleted: isDeleted ?? _element.isDeleted,
+              // don't add the field to unformatted text
+              // (an empty array clears it: `undefined` is no update)
+              ...(textStyles && (textStyles.value || _element.textStyles)
+                ? { textStyles: textStyles.value ?? [] }
+                : null),
               ...(stickyLayout?.text ??
                 // returns (wrapped) text and new dimensions
                 refreshTextDimensions(
@@ -289,75 +299,77 @@ export class AppText {
           viewportY - this.app.state.offsetTop,
         ];
       },
-      onChange: withBatchedUpdates((nextOriginalText) => {
-        updateElement(nextOriginalText, false);
+      onChange: withBatchedUpdates(({ nextOriginalText, textStyles }) => {
+        updateElement(nextOriginalText, false, { value: textStyles });
         if (isNonDeletedElement(element)) {
           updateBoundElements(element, this.app.scene);
         }
       }),
-      onSubmit: withBatchedUpdates(({ viaKeyboard, nextOriginalText }) => {
-        this.textWysiwygSubmitHandler = null;
+      onSubmit: withBatchedUpdates(
+        ({ viaKeyboard, nextOriginalText, textStyles }) => {
+          this.textWysiwygSubmitHandler = null;
 
-        const isDeleted = !nextOriginalText.trim();
-        updateElement(nextOriginalText, isDeleted);
+          const isDeleted = !nextOriginalText.trim();
+          updateElement(nextOriginalText, isDeleted, { value: textStyles });
 
-        // keyboard-submit keeps focus on the edited object. For bound text, keep
-        // the container selected even if the text becomes empty and is deleted.
-        // The autoshape tool stays active through the editing session and never
-        // selects anything — don't fight the finalize action's selection reset.
-        const elementIdToSelect =
-          viaKeyboard &&
-          !this.app.isToolLocked() &&
-          this.app.state.activeTool.type !== "autoshape"
-            ? element.containerId || (!isDeleted ? element.id : null)
-            : null;
+          // keyboard-submit keeps focus on the edited object. For bound text, keep
+          // the container selected even if the text becomes empty and is deleted.
+          // The autoshape tool stays active through the editing session and never
+          // selects anything — don't fight the finalize action's selection reset.
+          const elementIdToSelect =
+            viaKeyboard &&
+            !this.app.isToolLocked() &&
+            this.app.state.activeTool.type !== "autoshape"
+              ? element.containerId || (!isDeleted ? element.id : null)
+              : null;
 
-        if (elementIdToSelect) {
-          // needed to ensure state is updated before "finalize" action
-          // that's invoked on keyboard-submit as well
-          // TODO either move this into finalize as well, or handle all state
-          // updates in one place, skipping finalize action
+          if (elementIdToSelect) {
+            // needed to ensure state is updated before "finalize" action
+            // that's invoked on keyboard-submit as well
+            // TODO either move this into finalize as well, or handle all state
+            // updates in one place, skipping finalize action
+            flushSync(() => {
+              this.app.setState((prevState) => ({
+                selectedElementIds: makeNextSelectedElementIds(
+                  {
+                    ...prevState.selectedElementIds,
+                    [elementIdToSelect]: true,
+                  },
+                  prevState,
+                ),
+              }));
+            });
+          }
+
+          if (isDeleted) {
+            fixBindingsAfterDeletion(this.app.scene.getNonDeletedElements(), [
+              element,
+            ]);
+          }
+
+          if (!isDeleted || isExistingElement) {
+            this.app.store.scheduleCapture();
+          }
+
           flushSync(() => {
-            this.app.setState((prevState) => ({
-              selectedElementIds: makeNextSelectedElementIds(
-                {
-                  ...prevState.selectedElementIds,
-                  [elementIdToSelect]: true,
-                },
-                prevState,
-              ),
-            }));
+            this.app.setState({
+              newElement: null,
+              editingTextElement: null,
+            });
           });
-        }
 
-        if (isDeleted) {
-          fixBindingsAfterDeletion(this.app.scene.getNonDeletedElements(), [
-            element,
-          ]);
-        }
+          // tools that survive the submit (locked, or autoshape's
+          // double-click-to-type flow) need their cursor back
+          if (
+            this.app.isToolLocked() ||
+            this.app.state.activeTool.type === "autoshape"
+          ) {
+            this.app.cursor.applyForTool();
+          }
 
-        if (!isDeleted || isExistingElement) {
-          this.app.store.scheduleCapture();
-        }
-
-        flushSync(() => {
-          this.app.setState({
-            newElement: null,
-            editingTextElement: null,
-          });
-        });
-
-        // tools that survive the submit (locked, or autoshape's
-        // double-click-to-type flow) need their cursor back
-        if (
-          this.app.isToolLocked() ||
-          this.app.state.activeTool.type === "autoshape"
-        ) {
-          this.app.cursor.applyForTool();
-        }
-
-        this.app.focusContainer();
-      }),
+          this.app.focusContainer();
+        },
+      ),
       element,
       excalidrawContainer: this.dependencies.getContainer(),
       app: this.app,
