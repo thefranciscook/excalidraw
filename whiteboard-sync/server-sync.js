@@ -161,14 +161,25 @@
     };
   };
 
+  // fileIds of the board's images, nearest to the middle of the view first
   var imageFileIds = function () {
-    var ids = {};
+    var dist = {};
     try {
+      var state = JSON.parse(get("excalidraw-state") || "{}");
+      var zoom = (state.zoom && state.zoom.value) || 1;
+      var cx = -(state.scrollX || 0) + window.innerWidth / 2 / zoom;
+      var cy = -(state.scrollY || 0) + window.innerHeight / 2 / zoom;
       JSON.parse(get("excalidraw") || "[]").forEach(function (el) {
-        if (el.type === "image" && el.fileId && !el.isDeleted) ids[el.fileId] = 1;
+        if (el.type !== "image" || !el.fileId || el.isDeleted) return;
+        var dx = (el.x || 0) + (el.width || 0) / 2 - cx;
+        var dy = (el.y || 0) + (el.height || 0) / 2 - cy;
+        var d = dx * dx + dy * dy;
+        if (!(el.fileId in dist) || d < dist[el.fileId]) dist[el.fileId] = d;
       });
     } catch (e) {}
-    return Object.keys(ids);
+    return Object.keys(dist).sort(function (a, b) {
+      return dist[a] - dist[b];
+    });
   };
 
   // Image files are stored on the server (in a GitHub repo) by fileId, shared
@@ -178,34 +189,114 @@
   var onServer = null;
   var retryAt = {};
 
+  // Downloads: a few at a time, each image stored (and shown) as soon as it
+  // arrives, so a slow connection or an interrupted download doesn't hold
+  // back the rest. Failed downloads are retried with a growing delay.
+  var DOWNLOADS_AT_ONCE = 4;
+  var downloading = {};
+  var downloadRetryAt = {};
+  var downloadAttempts = {};
+  // ids of the current batch, for "Loading images 3/10"
+  var batch = {};
+  var batchDone = 0;
+  // the board has images that neither this browser nor the server has yet
+  // (e.g. another device is still uploading them)
+  var waitingForServer = false;
+
+  var statusEl = null;
+  var showStatus = function () {
+    if (!statusEl) return;
+    var text = "";
+    if (Object.keys(downloading).length) {
+      text = "Loading images " + batchDone + "/" + Object.keys(batch).length;
+    } else {
+      batch = {};
+      batchDone = 0;
+      var failed = Object.keys(downloadRetryAt).length;
+      if (failed) text = failed + (failed === 1 ? " image" : " images") + " couldn't load. Retrying…";
+    }
+    statusEl.textContent = text;
+    statusEl.style.display = text ? "" : "none";
+  };
+
+  var download = function (id, next) {
+    fetch(FILES_API + "/" + id)
+      .then(function (res) {
+        if (res.status === 404) delete onServer[id];
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        return res.json();
+      })
+      .then(function (file) {
+        return new Promise(function (resolve, reject) {
+          var files = {};
+          files[id] = file;
+          storeFiles(files, function (err) {
+            if (err) reject(err);
+            else resolve();
+          });
+        });
+      })
+      .then(
+        function () {
+          batchDone++;
+          delete downloadRetryAt[id];
+          delete downloadAttempts[id];
+        },
+        function (e) {
+          var attempts = (downloadAttempts[id] || 0) + 1;
+          downloadAttempts[id] = attempts;
+          // no retry if the server doesn't have it; the list is re-checked instead
+          if (onServer[id]) downloadRetryAt[id] = Date.now() + Math.min(60000, 5000 * Math.pow(2, attempts - 1));
+          else waitingForServer = true;
+          console.error("[server-sync] image download failed", id, e);
+        },
+      )
+      .then(function () {
+        delete downloading[id];
+        showStatus();
+        next();
+      });
+  };
+
   // Put images the board needs, but this browser doesn't have, into the store.
   var fetchMissingFiles = function () {
-    var ids = imageFileIds().filter(function (id) {
-      return onServer && onServer[id];
-    });
+    if (!onServer) return;
+    var ids = imageFileIds();
     if (!ids.length) return;
     readFiles(ids, function (have) {
-      var missing = ids.filter(function (id) {
-        return !have[id];
+      var now = Date.now();
+      var missing = {};
+      waitingForServer = false;
+      ids.forEach(function (id) {
+        if (have[id]) return;
+        missing[id] = 1;
+        if (!onServer[id]) waitingForServer = true;
       });
-      Promise.all(
-        missing.map(function (id) {
-          return fetch(FILES_API + "/" + id)
-            .then(function (res) {
-              return res.ok ? res.json() : null;
-            })
-            .catch(function () {
-              return null;
-            });
-        }),
-      ).then(function (list) {
-        var files = {};
-        list.forEach(function (file) {
-          if (file) files[file.id] = file;
-        });
-        if (Object.keys(files).length) storeFiles(files);
+      // forget failures of images that are no longer needed
+      Object.keys(downloadRetryAt).forEach(function (id) {
+        if (!missing[id]) delete downloadRetryAt[id];
       });
+      var queue = ids.filter(function (id) {
+        return missing[id] && onServer[id] && !downloading[id] && !(downloadRetryAt[id] > now);
+      });
+      queue.forEach(function (id) {
+        downloading[id] = 1;
+        batch[id] = 1;
+      });
+      showStatus();
+      var next = function () {
+        var id = queue.shift();
+        if (id) download(id, next);
+      };
+      for (var i = 0; i < DOWNLOADS_AT_ONCE; i++) next();
     });
+  };
+
+  var retryDownloadsIfDue = function () {
+    var now = Date.now();
+    for (var id in downloadRetryAt) {
+      if (downloadRetryAt[id] <= now && !downloading[id]) return fetchMissingFiles();
+    }
   };
 
   var syncFiles = function () {
@@ -360,11 +451,20 @@
   setInterval(function () {
     push();
     pushFiles();
+    retryDownloadsIfDue();
   }, 2000);
-  setInterval(pull, 15000);
+  setInterval(function () {
+    pull();
+    if (waitingForServer && !document.hidden) syncFiles();
+  }, 15000);
   document.addEventListener("visibilitychange", function () {
-    if (document.hidden) flush();
-    else pull();
+    if (document.hidden) return flush();
+    pull();
+    // downloads may have been cut off while the page was in the background
+    Object.keys(downloadRetryAt).forEach(function (id) {
+      downloadRetryAt[id] = 0;
+    });
+    retryDownloadsIfDue();
   });
   window.addEventListener("pagehide", flush);
 
@@ -377,7 +477,12 @@
       "background:#ececf4;color:#1b1b1f;box-shadow:0 0 0 1px #e0e0ea}" +
       "#wb-back:hover{background:#e0dfff}" +
       ".excalidraw.theme--dark ~ #wb-back,html.wb-dark #wb-back{background:#232329;color:#e3e3e8;box-shadow:0 0 0 1px #2e2d39}" +
-      "@media (max-width:730px){#wb-back{top:auto;bottom:72px;left:12px}}";
+      "@media (max-width:730px){#wb-back{top:auto;bottom:72px;left:12px}}" +
+      "#wb-status{position:fixed;z-index:10;top:72px;left:50%;transform:translateX(-50%);padding:6px 12px;" +
+      "border-radius:8px;font:500 13px/1.2 system-ui,sans-serif;white-space:nowrap;pointer-events:none;" +
+      "background:#ececf4;color:#1b1b1f;box-shadow:0 0 0 1px #e0e0ea}" +
+      "html.wb-dark #wb-status{background:#232329;color:#e3e3e8;box-shadow:0 0 0 1px #2e2d39}" +
+      "@media (max-width:730px){#wb-status{top:24px}}";
     document.head.appendChild(style);
     var a = document.createElement("a");
     a.id = "wb-back";
@@ -388,6 +493,11 @@
       "<span></span>";
     a.querySelector("span").textContent = boardName || "Boards";
     document.body.appendChild(a);
+    statusEl = document.createElement("div");
+    statusEl.id = "wb-status";
+    statusEl.setAttribute("role", "status");
+    document.body.appendChild(statusEl);
+    showStatus();
     // follow Excalidraw's theme
     var sync = function () {
       var dark = document.querySelector(".excalidraw.theme--dark");
