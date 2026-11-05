@@ -77,9 +77,27 @@
   }
 
   // Images from imported .excalidraw files are kept on the board as `files`.
+  // Excalidraw reloads images missing from the canvas on window focus, when
+  // version-files is newer than its own.
+  var notifyTimer = null;
+  var notifyExcalidraw = function () {
+    rawSet.call(localStorage, "version-files", JSON.stringify(Date.now()));
+    window.dispatchEvent(new Event("focus"));
+    // again later, in case Excalidraw wasn't listening yet
+    clearTimeout(notifyTimer);
+    notifyTimer = setTimeout(function () {
+      window.dispatchEvent(new Event("focus"));
+    }, 2000);
+  };
+
   // Put any missing ones into Excalidraw's image store (IndexedDB "files-db",
   // same layout as idb-keyval's createStore), then have it reload images.
-  var storeFiles = function (files) {
+  // Calls back with an error, or null once the files are stored.
+  var storeFiles = function (files, done) {
+    var finish = function (err, added) {
+      if (added) notifyExcalidraw();
+      if (done) done(err);
+    };
     var req = indexedDB.open("files-db");
     req.onupgradeneeded = function () {
       req.result.createObjectStore("files-store");
@@ -90,9 +108,9 @@
       var store = tx.objectStore("files-store");
       var added = 0;
       Object.keys(files).forEach(function (id) {
-        var check = store.getKey(id);
+        var check = store.count(id);
         check.onsuccess = function () {
-          if (check.result === undefined) {
+          if (!check.result) {
             store.put(files[id], id);
             added++;
           }
@@ -100,18 +118,18 @@
       });
       tx.oncomplete = function () {
         db.close();
-        if (added) {
-          rawSet.call(localStorage, "version-files", JSON.stringify(Date.now()));
-          window.dispatchEvent(new Event("focus"));
-          // again later, in case Excalidraw wasn't listening yet
-          setTimeout(function () {
-            window.dispatchEvent(new Event("focus"));
-          }, 2000);
-        }
+        finish(null, added);
+      };
+      // e.g. storage quota exceeded
+      tx.onabort = function () {
+        db.close();
+        console.error("[server-sync] couldn't store images", tx.error);
+        finish(tx.error || new Error("transaction aborted"), 0);
       };
     };
     req.onerror = function () {
       console.error("[server-sync] couldn't store images", req.error);
+      finish(req.error, 0);
     };
   };
 
