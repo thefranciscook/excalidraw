@@ -14,12 +14,14 @@
 //   GET    /api/files            list stored file ids
 //   GET    /api/files/:fileId    {id, mimeType, dataURL, created}
 //   PUT    /api/files/:fileId    store {mimeType, dataURL}
+//
+// The Claude connector (read-only) lives in mcp/: /mcp, /oauth/*, /.well-known/*.
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
 
-const PORT = 3010;
+const PORT = Number(process.env.PORT) || 3010;
 const DATA_DIR = path.join(__dirname, "data");
 const BOARDS_DIR = path.join(DATA_DIR, "boards");
 const HISTORY_DIR = path.join(DATA_DIR, "history");
@@ -206,6 +208,24 @@ const uploadFile = (id, mimeType, base64) =>
     fileIndex.set(id, filePath);
   });
 
+// {id, mimeType, dataURL, created}, or null when there's no such file
+const getFile = async (id) => {
+  if (!GITHUB_TOKEN || !FILE_ID_RE.test(id)) return null;
+  const filePath = await findFile(id);
+  if (!filePath) return null;
+  const gh = await github(`/contents/${filePath}?ref=${GITHUB_BRANCH}`, {
+    headers: { Accept: "application/vnd.github.raw+json" },
+  });
+  if (gh.status === 404) {
+    fileIndex.delete(id);
+    return null;
+  }
+  if (!gh.ok) throw new Error(`download ${gh.status}`);
+  const mimeType = EXT_MIME[filePath.split(".").pop()] || "application/octet-stream";
+  const dataURL = `data:${mimeType};base64,${Buffer.from(await gh.arrayBuffer()).toString("base64")}`;
+  return { id, mimeType, dataURL, created: Date.now() };
+};
+
 const handleFiles = async (req, res, id) => {
   if (!GITHUB_TOKEN) return send(res, 503);
   if (!id) {
@@ -216,20 +236,10 @@ const handleFiles = async (req, res, id) => {
   if (!FILE_ID_RE.test(id)) return send(res, 400);
 
   if (req.method === "GET") {
-    const filePath = await findFile(id);
-    if (!filePath) return send(res, 404);
-    const gh = await github(`/contents/${filePath}?ref=${GITHUB_BRANCH}`, {
-      headers: { Accept: "application/vnd.github.raw+json" },
-    });
-    if (gh.status === 404) {
-      fileIndex.delete(id);
-      return send(res, 404);
-    }
-    if (!gh.ok) throw new Error(`download ${gh.status}`);
-    const mimeType = EXT_MIME[filePath.split(".").pop()] || "application/octet-stream";
-    const dataURL = `data:${mimeType};base64,${Buffer.from(await gh.arrayBuffer()).toString("base64")}`;
+    const file = await getFile(id);
+    if (!file) return send(res, 404);
     res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "private, max-age=31536000, immutable" });
-    return res.end(JSON.stringify({ id, mimeType, dataURL, created: Date.now() }));
+    return res.end(JSON.stringify(file));
   }
 
   if (req.method === "PUT") {
@@ -253,9 +263,28 @@ const handleFiles = async (req, res, id) => {
 if (GITHUB_TOKEN) loadIndex();
 else console.warn("GITHUB_TOKEN not set: image storage (/api/files) is disabled");
 
+// Claude connector (remote MCP server + its OAuth login). Caddy exposes these
+// paths without its own login; they check their own bearer tokens.
+const connector = require("./mcp")({
+  dataDir: DATA_DIR,
+  readBoard,
+  listBoardIds: () =>
+    fs
+      .readdirSync(BOARDS_DIR)
+      .filter((f) => f.endsWith(".json"))
+      .map((f) => f.slice(0, -5)),
+  getFile,
+});
+
 http
   .createServer((req, res) => {
     const url = new URL(req.url, "http://localhost");
+    if (connector.handles(url.pathname)) {
+      return connector.handle(req, res, url).catch((e) => {
+        console.error("connector request failed:", e.stack || e.message);
+        if (!res.headersSent) send(res, 500);
+      });
+    }
     const f = url.pathname.match(/^\/api\/files(?:\/([^/]+))?$/);
     if (f) {
       return handleFiles(req, res, f[1]).catch((e) => {

@@ -1,0 +1,12 @@
+{
+  "name": "whiteboard-sync",
+  "private": true,
+  "description": "Self-hosting add-ons for whiteboard.supa.company (board storage and the Claude connector)",
+  "scripts": {
+    "start": "node server.js",
+    "install-browser": "playwright install --with-deps chromium"
+  },
+  "dependencies": {
+    "playwright": "1.58.2"
+  }
+}
