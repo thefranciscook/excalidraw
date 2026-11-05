@@ -2,7 +2,7 @@ import { KEYS } from "@excalidraw/common";
 
 import type { ExcalidrawTextElement } from "@excalidraw/element/types";
 
-import { Excalidraw, exportToSvg } from "../index";
+import { Excalidraw, exportScene } from "../index";
 import { restoreElements } from "../data/restore";
 
 import { API } from "./helpers/api";
@@ -262,12 +262,11 @@ describe("text formatting", () => {
       ],
     };
 
-    const svg = await exportToSvg({
-      elements: [text],
-      appState: { exportBackground: false },
-      files: null,
-      skipInliningFonts: true,
-    } as any);
+    const svg = await exportScene({
+      type: "svg",
+      data: { elements: [text], files: null },
+      config: { canvasBackgroundColor: false, skipInliningFonts: true },
+    });
 
     expect(
       Array.from(svg.querySelectorAll("tspan")).map((tspan) => [
