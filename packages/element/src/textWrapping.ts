@@ -2,6 +2,7 @@ import { isDevEnv, isTestEnv } from "@excalidraw/common";
 
 import { charWidth, getLineWidth } from "./textMeasurements";
 
+import type { RenderEnvironment } from "./renderEnvironment";
 import type { FontString } from "./types";
 
 /**
@@ -398,13 +399,14 @@ export const wrapText = (
   text: string,
   font: FontString,
   maxWidth: number,
+  env?: RenderEnvironment,
 ): string => {
   return text
     .split("\n")
     .map(
       (line) =>
-        wrapListItem(line, font, maxWidth) ??
-        getWrappedTextLines(line, font, maxWidth)
+        wrapListItem(line, font, maxWidth, env) ??
+        getWrappedTextLines(line, font, maxWidth, env)
           .map((wrappedLine) => wrappedLine.text)
           .join("\n"),
     )
@@ -431,18 +433,19 @@ const wrapListItem = (
   line: string,
   font: FontString,
   maxWidth: number,
+  env?: RenderEnvironment,
 ): string | null => {
   const prefix = line.match(LIST_ITEM_PREFIX_REGEX)?.[0];
   if (
     !prefix ||
     !Number.isFinite(maxWidth) ||
-    getLineWidth(line, font) <= maxWidth
+    getLineWidth(line, font, env) <= maxWidth
   ) {
     return null;
   }
 
-  const prefixWidth = getLineWidth(prefix, font);
-  const spaceWidth = charWidth.calculate(" ", font);
+  const prefixWidth = getLineWidth(prefix, font, env);
+  const spaceWidth = charWidth.calculate(" ", font, env);
   // too narrow to leave the text room next to the indent
   if (!spaceWidth || prefixWidth > maxWidth / 2) {
     return null;
@@ -450,9 +453,14 @@ const wrapListItem = (
 
   const indent = " ".repeat(Math.round(prefixWidth / spaceWidth));
   const contentMaxWidth =
-    maxWidth - Math.max(prefixWidth, getLineWidth(indent, font));
+    maxWidth - Math.max(prefixWidth, getLineWidth(indent, font, env));
 
-  return getWrappedTextLines(line.slice(prefix.length), font, contentMaxWidth)
+  return getWrappedTextLines(
+    line.slice(prefix.length),
+    font,
+    contentMaxWidth,
+    env,
+  )
     .map((wrappedLine, index) => (index ? indent : prefix) + wrappedLine.text)
     .join("\n");
 };
@@ -500,6 +508,7 @@ export const getWrappedTextLines = (
   text: string,
   font: FontString,
   maxWidth: number,
+  env?: RenderEnvironment,
 ): WrappedTextLine[] => {
   // if maxWidth is not finite or NaN which can happen in case of bugs in
   // computation, we need to make sure we don't continue as we'll end up
@@ -512,7 +521,7 @@ export const getWrappedTextLines = (
   let offset = 0;
 
   for (const originalLine of text.split("\n")) {
-    const originalLineWidth = getLineWidth(originalLine, font);
+    const originalLineWidth = getLineWidth(originalLine, font, env);
 
     if (originalLineWidth <= maxWidth) {
       lines.push({
@@ -521,7 +530,7 @@ export const getWrappedTextLines = (
         end: offset + originalLine.length,
       });
     } else {
-      lines.push(...wrapLine(originalLine, font, maxWidth, offset));
+      lines.push(...wrapLine(originalLine, font, maxWidth, offset, env));
     }
 
     offset += originalLine.length + 1;
@@ -541,6 +550,7 @@ const wrapLine = (
   font: FontString,
   maxWidth: number,
   lineStart: number,
+  env?: RenderEnvironment,
 ): WrappedTextLine[] => {
   const lines: WrappedTextLine[] = [];
   const tokens = parseTokens(line);
@@ -561,8 +571,8 @@ const wrapLine = (
 
     // cache single codepoint whitespace, CJK or emoji width calc. as kerning should not apply here
     const testLineWidth = isSingleCharacter(token)
-      ? currentLineWidth + charWidth.calculate(token, font)
-      : getLineWidth(testLine, font);
+      ? currentLineWidth + charWidth.calculate(token, font, env)
+      : getLineWidth(testLine, font, env);
 
     // build up the current line, skipping length check for possibly trailing whitespaces
     if (/\s/.test(token) || testLineWidth <= maxWidth) {
@@ -579,7 +589,7 @@ const wrapLine = (
 
     // current line is empty => just the token (word) is longer than `maxWidth` and needs to be wrapped
     if (!currentLine) {
-      const wrappedWord = wrapWord(token, font, maxWidth, tokenStart);
+      const wrappedWord = wrapWord(token, font, maxWidth, tokenStart, env);
       const trailingLine = wrappedWord[wrappedWord.length - 1] ?? {
         text: "",
         start: tokenStart,
@@ -593,7 +603,7 @@ const wrapLine = (
       currentLine = trailingLine.text;
       currentLineStart = trailingLine.start;
       currentLineEnd = trailingLine.end;
-      currentLineWidth = getLineWidth(trailingLine.text, font);
+      currentLineWidth = getLineWidth(trailingLine.text, font, env);
       tokenOffset = tokenEnd;
       tokenIndex++;
     } else {
@@ -618,6 +628,7 @@ const wrapLine = (
       currentLineEnd,
       font,
       maxWidth,
+      env,
     );
     lines.push(trailingLine);
   }
@@ -633,6 +644,7 @@ const wrapWord = (
   font: FontString,
   maxWidth: number,
   wordStart: number,
+  env?: RenderEnvironment,
 ): WrappedTextLine[] => {
   // multi-codepoint emojis are already broken apart and shouldn't be broken further
   if (getEmojiRegex().test(word)) {
@@ -659,7 +671,7 @@ const wrapWord = (
   for (const char of chars) {
     const charStart = offset;
     const charEnd = charStart + char.length;
-    const _charWidth = charWidth.calculate(char, font);
+    const _charWidth = charWidth.calculate(char, font, env);
     const testLineWidth = currentLineWidth + _charWidth;
 
     if (testLineWidth <= maxWidth) {
@@ -711,8 +723,9 @@ const trimLine = (
   end: number,
   font: FontString,
   maxWidth: number,
+  env?: RenderEnvironment,
 ): WrappedTextLine => {
-  const shouldTrimWhitespaces = getLineWidth(line, font) > maxWidth;
+  const shouldTrimWhitespaces = getLineWidth(line, font, env) > maxWidth;
 
   if (!shouldTrimWhitespaces) {
     return {
@@ -729,10 +742,10 @@ const trimLine = (
     "",
   ];
 
-  let trimmedLineWidth = getLineWidth(trimmedLine, font);
+  let trimmedLineWidth = getLineWidth(trimmedLine, font, env);
 
   for (const whitespace of Array.from(whitespaces)) {
-    const _charWidth = charWidth.calculate(whitespace, font);
+    const _charWidth = charWidth.calculate(whitespace, font, env);
     const testLineWidth = trimmedLineWidth + _charWidth;
 
     if (testLineWidth > maxWidth) {

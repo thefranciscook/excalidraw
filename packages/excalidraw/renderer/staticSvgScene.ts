@@ -38,7 +38,7 @@ import {
   isTextElement,
 } from "@excalidraw/element";
 
-import { getContainingFrame } from "@excalidraw/element";
+import { getContainingFrame, isFrameClippable } from "@excalidraw/element";
 
 import { getCornerRadius, isPathALoop } from "@excalidraw/element";
 
@@ -85,7 +85,11 @@ const maybeWrapNodesInFrameClipPath = (
   frameRendering: AppState["frameRendering"],
   elementsMap: RenderableElementsMap,
 ) => {
-  if (!frameRendering.enabled || !frameRendering.clip) {
+  if (
+    !frameRendering.enabled ||
+    !frameRendering.clip ||
+    !isFrameClippable(element, elementsMap)
+  ) {
     return null;
   }
   const frame = getContainingFrame(element, elementsMap);
@@ -328,7 +332,10 @@ const renderElementToSvg = (
       );
       addToRoot(node, element);
 
-      const label = createPlaceholderEmbeddableLabel(element);
+      const label = createPlaceholderEmbeddableLabel(
+        element,
+        renderConfig.renderEnvironment,
+      );
       renderElementToSvg(
         label,
         elementsMap,
@@ -748,7 +755,7 @@ const renderElementToSvg = (
         renderConfig.frameRendering.enabled &&
         renderConfig.frameRendering.outline
       ) {
-        const rect = document.createElementNS(SVG_NS, "rect");
+        const rect = svgRoot.ownerDocument.createElementNS(SVG_NS, "rect");
 
         rect.setAttribute(
           "transform",

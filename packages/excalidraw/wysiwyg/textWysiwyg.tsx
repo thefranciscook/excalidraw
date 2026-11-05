@@ -447,7 +447,9 @@ export const textWysiwyg = ({
             app.scene.mutateElement(container, {
               height: targetContainerHeight,
             });
-            updateBoundElements(container, app.scene);
+            updateBoundElements(container, app.scene, {
+              renderEnvironment: app.renderEnvironment,
+            });
             return;
           } else if (
             // autoshrink container height until original container height
@@ -463,7 +465,9 @@ export const textWysiwyg = ({
             app.scene.mutateElement(container, {
               height: targetContainerHeight,
             });
-            updateBoundElements(container, app.scene);
+            updateBoundElements(container, app.scene, {
+              renderEnvironment: app.renderEnvironment,
+            });
           } else {
             const { x, y } = computeBoundTextPosition(
               container,
@@ -835,6 +839,7 @@ export const textWysiwyg = ({
       editable.value,
       layout.font,
       whiteSpace === "pre-wrap" ? layout.width : Infinity,
+      app.renderEnvironment,
     );
     const lineIndex = Math.max(
       0,
@@ -842,7 +847,11 @@ export const textWysiwyg = ({
     );
     const line = lines[lineIndex];
     const direction = getLineDirection(editable.value, line.start);
-    const lineWidth = getLineWidth(line.text, layout.font);
+    const lineWidth = getLineWidth(
+      line.text,
+      layout.font,
+      app.renderEnvironment,
+    );
     const lineStartX =
       layout.textAlign === "center"
         ? (layout.width - lineWidth) / 2
@@ -1076,8 +1085,16 @@ export const textWysiwyg = ({
         const { selectionStart, selectionEnd, value } = editable;
         const nextText =
           value.slice(0, selectionStart) + text + value.slice(selectionEnd);
-        const wrappedText = wrapText(nextText, font, maxWidth);
-        const width = Math.min(getTextWidth(wrappedText, font), maxWidth);
+        const wrappedText = wrapText(
+          nextText,
+          font,
+          maxWidth,
+          app.renderEnvironment,
+        );
+        const width = Math.min(
+          getTextWidth(wrappedText, font, app.renderEnvironment),
+          maxWidth,
+        );
         editable.style.width = `${width}px`;
       }
     };
@@ -1398,7 +1415,12 @@ export const textWysiwyg = ({
         });
       }
 
-      redrawTextBoundingBox(updateElement, container, app.scene);
+      redrawTextBoundingBox(
+        updateElement,
+        container,
+        app.scene,
+        app.renderEnvironment,
+      );
     }
 
     remapTextStylesOnInput();
@@ -1421,7 +1443,9 @@ export const textWysiwyg = ({
 
     ownerWindow.removeEventListener("resize", updateWysiwygStyle);
     ownerWindow.removeEventListener("wheel", stopEvent, true);
-    ownerWindow.removeEventListener("pointerdown", onPointerDown);
+    ownerWindow.removeEventListener("pointerdown", onPointerDown, {
+      capture: true,
+    });
     ownerWindow.removeEventListener("pointerup", bindBlurEvent);
     ownerWindow.removeEventListener("blur", handleSubmit);
     ownerWindow.removeEventListener("beforeunload", handleSubmit);
@@ -1494,13 +1518,13 @@ export const textWysiwyg = ({
 
     // panning canvas
     if (event.button === POINTER_BUTTON.WHEEL) {
+      // before the pan starts: it focuses the container, blurring the editor
+      temporarilyDisableSubmit();
       // trying to pan by clicking inside text area itself -> handle here
       if (target instanceof ownerWindow.HTMLTextAreaElement) {
         event.preventDefault();
         app.pan.start(event);
       }
-
-      temporarilyDisableSubmit();
       return;
     }
 

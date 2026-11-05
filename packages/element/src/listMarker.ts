@@ -9,6 +9,7 @@ import {
 } from "./textElement";
 import { isBoundToContainer, isTextElement } from "./typeChecks";
 
+import type { RenderEnvironment } from "./renderEnvironment";
 import type { Scene } from "./Scene";
 import type { ExcalidrawElement, ExcalidrawTextElement } from "./types";
 
@@ -268,6 +269,7 @@ const setText = (
   container: ExcalidrawElement | null,
   originalText: string,
   scene: Scene,
+  renderEnvironment: RenderEnvironment | undefined,
 ) => {
   // keep the formatting on the same characters (the marker changed)
   const styles = element.textStyles?.length
@@ -284,7 +286,7 @@ const setText = (
   if (container) {
     scene.mutateElement(element, { originalText, ...styles });
     // re-wraps the label, and grows the container if need be
-    redrawTextBoundingBox(element, container, scene);
+    redrawTextBoundingBox(element, container, scene, renderEnvironment);
   } else {
     scene.mutateElement(element, {
       originalText,
@@ -295,6 +297,8 @@ const setText = (
         null,
         scene.getNonDeletedElementsMap(),
         originalText,
+        undefined,
+        renderEnvironment,
       ),
     });
   }
@@ -314,6 +318,8 @@ const setText = (
 export const advanceDuplicatedListMarkers = (
   duplicatedElements: readonly ExcalidrawElement[],
   scene: Scene,
+  /** measures the re-numbered texts */
+  renderEnvironment?: RenderEnvironment,
 ): ListMarkerAdvance[] => {
   const duplicatesMap = arrayToMap(duplicatedElements);
   const elementsMap = scene.getNonDeletedElementsMap();
@@ -396,7 +402,7 @@ export const advanceDuplicatedListMarkers = (
           : null,
       });
 
-      setText(element, container, nextOriginalText, scene);
+      setText(element, container, nextOriginalText, scene, renderEnvironment);
     }
   }
 
@@ -410,6 +416,8 @@ export const applyListMarkerAdvances = (
   advances: readonly ListMarkerAdvance[],
   direction: "prev" | "next",
   scene: Scene,
+  /** measures the re-numbered texts */
+  renderEnvironment?: RenderEnvironment,
 ) => {
   const elementsMap = scene.getNonDeletedElementsMap();
 
@@ -432,6 +440,7 @@ export const applyListMarkerAdvances = (
         ? advance.prevOriginalText
         : advance.nextOriginalText,
       scene,
+      renderEnvironment,
     );
   }
 };

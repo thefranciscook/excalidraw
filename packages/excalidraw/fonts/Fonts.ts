@@ -1,5 +1,6 @@
 import {
   FONT_FAMILY,
+  DEFAULT_FONT_FAMILY,
   FONT_FAMILY_FALLBACKS,
   CJK_HAND_DRAWN_FALLBACK_FONT,
   WINDOWS_EMOJI_FALLBACK_FONT,
@@ -55,9 +56,16 @@ import { NunitoFontFaces } from "./Nunito";
 import { VirgilFontFaces } from "./Virgil";
 import { XiaolaiFontFaces } from "./Xiaolai";
 
+/** warned once per process, not per export (e.g. on a server) */
+let warnedNoFontFaceSet = false;
+
+/** a worker's own font set (`WorkerGlobalScope.fonts`), if this is one */
+const getWorkerFontFaceSet = (): FontFaceSet | null =>
+  typeof self !== "undefined" && "fonts" in self
+    ? (self as unknown as { fonts: FontFaceSet }).fonts
+    : null;
+
 export class Fonts {
-  // it's ok to track fonts across multiple instances only once, so let's use
-  // a static member to reduce memory footprint
   public static readonly loadedFontsCache = new Set<string>();
 
   private static _registered:
@@ -103,6 +111,7 @@ export class Fonts {
 
   private readonly scene: Scene;
   private readonly ownerDocument: Document;
+  private readonly loadedFonts = new Set<string>();
 
   constructor(scene: Scene, ownerDocument: Document = document) {
     this.scene = scene;
@@ -125,17 +134,19 @@ export class Fonts {
    * of the supplied fontFaces has not already been processed.
    */
   public onLoaded = (fontFaces: readonly FontFace[]): void => {
-    // bail if all fonts with have been processed. We're checking just a
-    // subset of the font properties (though it should be enough), so it
-    // can technically bail on a false positive.
+    // bail if all fonts with have been processed by THIS instance. We're
+    // checking just a subset of the font properties (though it should be
+    // enough), so it can technically bail on a false positive.
     let shouldBail = true;
 
     for (const fontFace of fontFaces) {
       const sig = `${fontFace.family}-${fontFace.style}-${fontFace.weight}-${fontFace.unicodeRange}`;
 
       // make sure to update our cache with all the loaded font faces
-      if (!Fonts.loadedFontsCache.has(sig)) {
-        Fonts.loadedFontsCache.add(sig);
+      Fonts.loadedFontsCache.add(sig);
+
+      if (!this.loadedFonts.has(sig)) {
+        this.loadedFonts.add(sig);
         shouldBail = false;
       }
     }
@@ -176,17 +187,26 @@ export class Fonts {
   /**
    * Load font faces for a given scene and trigger scene update.
    */
-  public loadSceneFonts = async (): Promise<FontFace[]> => {
-    const sceneFamilies = this.getSceneFamilies();
+  public loadSceneFonts = async (
+    defaultFontFamily: ExcalidrawTextElement["fontFamily"] = DEFAULT_FONT_FAMILY,
+  ): Promise<FontFace[]> => {
+    const elements = this.scene.getNonDeletedElements();
+    const sceneFamilies = Fonts.getUniqueFamilies(elements);
+    const charsPerFamily = Fonts.getCharsPerFamily(elements);
+
+    // prewarm the default font so that the first text element is not
+    // rendered with a fallback font
+    if (!sceneFamilies.includes(defaultFontFamily)) {
+      sceneFamilies.push(defaultFontFamily);
+      charsPerFamily[defaultFontFamily] = new Set("Excalidraw");
+    }
+
     await Fonts.ensureDynamicFonts(sceneFamilies, this.ownerDocument);
-    const charsPerFamily = Fonts.getCharsPerFamily(
-      this.scene.getNonDeletedElements(),
-    );
 
     return Fonts.loadFontFaces(
       sceneFamilies,
       charsPerFamily,
-      this.ownerDocument,
+      this.ownerDocument.fonts,
     );
   };
 
@@ -217,17 +237,49 @@ export class Fonts {
 
   /**
    * Load font faces for passed elements - use when the scene is unavailable (i.e. export).
+   *
+   * Loads into the document's font set, or in a worker into the worker's own
+   * (`self.fonts`, what an `OffscreenCanvas` there measures with). Where there
+   * is neither -- e.g. a DOM shim without `FontFaceSet` (`linkedom`), or Node
+   * -- nothing is loaded: the host makes the fonts available itself, and is
+   * warned once if the elements use fonts that would need loading.
    */
   public static loadElementsFonts = async (
     elements: readonly ExcalidrawElement[],
-    ownerDocument: Document = document,
+    ownerDocument?: Document,
   ): Promise<FontFace[]> => {
+    const fontFaceSet =
+      (ownerDocument ?? (typeof document !== "undefined" ? document : null))
+        ?.fonts ?? getWorkerFontFaceSet();
+
     const fontFamilies = Fonts.getUniqueFamilies(elements);
+
+    if (!fontFaceSet) {
+      // local fonts (e.g. Helvetica) are never loaded anyway
+      if (
+        !warnedNoFontFaceSet &&
+        fontFamilies.some((family) => !FONT_METADATA[family]?.local)
+      ) {
+        warnedNoFontFaceSet = true;
+        console.warn(
+          "Excalidraw: there is no font set (`document.fonts`, or a worker's " +
+            "`self.fonts`) to load the exported fonts into, so text is " +
+            "measured and drawn with whatever fonts this environment has. " +
+            "Load them yourself in `config.environment.loadFonts`.",
+        );
+      }
+      return [];
+    }
+
     const charsPerFamily = Fonts.getCharsPerFamily(elements);
 
-    await Fonts.ensureDynamicFonts(fontFamilies, ownerDocument);
+    await Fonts.ensureDynamicFonts(
+      fontFamilies,
+      ownerDocument ?? (typeof document !== "undefined" ? document : null),
+      fontFaceSet,
+    );
 
-    return Fonts.loadFontFaces(fontFamilies, charsPerFamily, ownerDocument);
+    return Fonts.loadFontFaces(fontFamilies, charsPerFamily, fontFaceSet);
   };
 
   /**
@@ -275,9 +327,9 @@ export class Fonts {
   private static async loadFontFaces(
     fontFamilies: Array<ExcalidrawTextElement["fontFamily"]>,
     charsPerFamily: Record<number, Set<string>>,
-    ownerDocument: Document,
+    fontFaceSet: FontFaceSet,
   ) {
-    // add all registered font faces into the `document.fonts` (if not added already)
+    // add all registered font faces into the font set (if not added already)
     for (const { fontFaces, metadata } of Fonts.registered.values()) {
       // skip registering font faces for local fonts (i.e. Helvetica)
       if (metadata.local) {
@@ -285,8 +337,8 @@ export class Fonts {
       }
 
       for (const { fontFace } of fontFaces) {
-        if (!ownerDocument.fonts.has(fontFace)) {
-          ownerDocument.fonts.add(fontFace);
+        if (!fontFaceSet.has(fontFace)) {
+          fontFaceSet.add(fontFace);
         }
       }
     }
@@ -295,7 +347,7 @@ export class Fonts {
     const iterator = Fonts.fontFacesLoader(
       fontFamilies,
       charsPerFamily,
-      ownerDocument,
+      fontFaceSet,
     );
     const concurrency = 10;
     const fontFaces = await new PromisePool(iterator, concurrency).all();
@@ -305,7 +357,7 @@ export class Fonts {
   private static *fontFacesLoader(
     fontFamilies: Array<ExcalidrawTextElement["fontFamily"]>,
     charsPerFamily: Record<number, Set<string>>,
-    ownerDocument: Document,
+    fontFaceSet: FontFaceSet,
   ): Generator<Promise<void | readonly [number, FontFace[]]>> {
     for (const [index, fontFamily] of fontFamilies.entries()) {
       const font = getFontString({
@@ -317,12 +369,12 @@ export class Fonts {
       // instead, we are always checking chars used in the family, so that no required font faces remain unloaded
       const text = Fonts.getCharacters(charsPerFamily, fontFamily);
 
-      if (!ownerDocument.fonts.check(font, text)) {
+      if (!fontFaceSet.check(font, text)) {
         yield promiseTry(async () => {
           try {
             // WARN: browser prioritizes loading only font faces with unicode ranges for characters which are present in the document (html & canvas), other font faces could stay unloaded
             // we might want to retry here, i.e.  in case CDN is down, but so far I didn't experience any issues - maybe it handles retry-like logic under the hood
-            const fontFaces = await ownerDocument.fonts.load(font, text);
+            const fontFaces = await fontFaceSet.load(font, text);
 
             return [index, fontFaces];
           } catch (e) {
@@ -392,17 +444,25 @@ export class Fonts {
    *
    * No-op for bundled fonts, or when Google Fonts are disabled.
    *
+   * The font faces go into `fontFaceSet` (by default the document's). Without
+   * a font set (e.g. on a server), the fonts are only registered, i.e. for
+   * inlining into an SVG export. Without a document, their metrics aren't
+   * measured.
+   *
    * @returns whether all the passed runtime fonts are available
    */
   public static async ensureDynamicFonts(
     fontFamilies: readonly number[],
-    ownerDocument: Document = document,
+    ownerDocument: Document | null = typeof document !== "undefined"
+      ? document
+      : null,
+    fontFaceSet: FontFaceSet | null = ownerDocument?.fonts ?? null,
   ): Promise<boolean> {
     const results = await Promise.all(
       fontFamilies
         .filter((fontFamily) => isGoogleFontFamily(fontFamily))
         .map((fontFamily) =>
-          Fonts.ensureDynamicFont(fontFamily, ownerDocument),
+          Fonts.ensureDynamicFont(fontFamily, ownerDocument, fontFaceSet),
         ),
     );
 
@@ -411,15 +471,16 @@ export class Fonts {
 
   private static ensureDynamicFont(
     fontFamily: number,
-    ownerDocument: Document,
+    ownerDocument: Document | null,
+    fontFaceSet: FontFaceSet | null,
   ): Promise<boolean> {
     const existing = Fonts.dynamicFonts.get(fontFamily);
 
     if (existing) {
       return existing.then((registered) => {
-        // make sure the font faces are part of this document too
-        if (registered) {
-          Fonts.addFontFacesToDocument(fontFamily, ownerDocument);
+        // make sure the font faces are part of this font set too
+        if (registered && fontFaceSet) {
+          Fonts.addFontFacesToSet(fontFamily, fontFaceSet);
         }
         return registered;
       });
@@ -451,17 +512,23 @@ export class Fonts {
       const descriptors = await fetchGoogleFontDescriptors(info.name);
 
       Fonts.registerDynamic(fontFamily, info.name, metadata, descriptors);
-      Fonts.addFontFacesToDocument(fontFamily, ownerDocument);
+
+      if (!fontFaceSet) {
+        return true;
+      }
+
+      Fonts.addFontFacesToSet(fontFamily, fontFaceSet);
 
       try {
         // load the font face covering the space glyph (typically latin),
         // which is the "first available font" used for the font metrics
-        await ownerDocument.fonts.load(
+        await fontFaceSet.load(
           `${FONT_SIZES.sm}px ${quoteFontFamilyName(info.name)}`,
           " ",
         );
 
-        const metrics = measureGoogleFontMetrics(info.name, ownerDocument);
+        const metrics =
+          ownerDocument && measureGoogleFontMetrics(info.name, ownerDocument);
 
         if (metrics) {
           const current = getRuntimeFont(fontFamily)?.metadata.metrics;
@@ -491,14 +558,14 @@ export class Fonts {
     return promise;
   }
 
-  private static addFontFacesToDocument(
+  private static addFontFacesToSet(
     fontFamily: number,
-    ownerDocument: Document,
+    fontFaceSet: FontFaceSet,
   ) {
     for (const { fontFace } of Fonts.registered.get(fontFamily)?.fontFaces ??
       []) {
-      if (!ownerDocument.fonts.has(fontFace)) {
-        ownerDocument.fonts.add(fontFace);
+      if (!fontFaceSet.has(fontFace)) {
+        fontFaceSet.add(fontFace);
       }
     }
   }
@@ -663,13 +730,6 @@ export class Fonts {
     return charsPerFamily[family]
       ? Array.from(charsPerFamily[family]).join("")
       : "";
-  }
-
-  /**
-   * Get all registered font families.
-   */
-  private static getAllFamilies() {
-    return Array.from(Fonts.registered.keys());
   }
 }
 
