@@ -1,10 +1,10 @@
-// Read-only render page for whiteboard.supa.company, used by the Claude Code
-// "whiteboard" plugin (and handy in a browser too).
+// Read-only render page for whiteboard.supa.company, driven headlessly by the
+// Claude connector (whiteboard-sync/mcp/render.js) and handy in a browser too.
 //
-//   /render/render.html#board=<id>&frame=<elementId>&max=<px>
+//   /render/render.html#board=<id>&frame=<elementId>&max=<px>&format=png|jpeg
 //
 // Loads the board and its images from /api (GET only, never saves), exports
-// the frame (or the whole board without `frame`) to PNG with this fork's
+// the frame (or the whole board without `frame`) with this fork's
 // exportScene, shows it, and publishes the result on
 // `window.__whiteboardRender` for headless callers.
 import { getNonDeletedElements } from "@excalidraw/element";
@@ -81,6 +81,7 @@ const render = async (): Promise<RenderResult> => {
   const boardId = params.get("board") || "";
   const frameId = params.get("frame");
   const maxSide = Number(params.get("max")) || DEFAULT_MAX_SIDE;
+  const format = params.get("format") === "jpeg" ? "jpeg" : "png";
 
   if (!BOARD_ID_RE.test(boardId)) {
     throw new Error("missing or invalid #board=<id>");
@@ -137,16 +138,21 @@ const render = async (): Promise<RenderResult> => {
       }),
   );
 
-  const blob = await exportScene({
-    type: "png",
-    data: { elements, appState: board.appState || {}, files },
-    config: {
-      exportingFrame: frame,
-      padding: frame ? 0 : 20,
-      scale: (width, height) =>
-        Math.min(MAX_SCALE, maxSide / Math.max(width, height, 1)),
-    },
-  });
+  const config = {
+    exportingFrame: frame,
+    padding: frame ? 0 : 20,
+    scale: (width: number, height: number) =>
+      Math.min(MAX_SCALE, maxSide / Math.max(width, height, 1)),
+  };
+  const data = { elements, appState: board.appState || {}, files };
+  const blob =
+    format === "jpeg"
+      ? await exportScene({
+          type: "jpeg",
+          data,
+          config: { ...config, quality: 0.88 },
+        })
+      : await exportScene({ type: "png", data, config });
   const dataURL = await blobToDataURL(blob);
   const { width, height } = await readImageSize(dataURL);
 

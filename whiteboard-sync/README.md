@@ -16,53 +16,75 @@ Self-hosting add-ons for whiteboard.supa.company. On the VPS they live in `/home
 
 Without a token, `/api/files` answers 503 and images stay only in the browser.
 
-## Boards in Claude Code
+## Claude connector
 
-The `whiteboard` skill lets Claude Code look at a board or one of its frames while you work in another repo, such as a website. Paste a frame link (right-click the frame, then "Copy link to object"), or name it: "use the Hero frame on the Inspiration board".
+`mcp/` adds a read-only connector, so Claude can look at your boards in claude.ai, the Claude desktop and mobile apps, and Claude Code. Paste a frame link (right-click the frame, then "Copy link to object"), or name it: "use the Hero frame on the Inspiration board".
 
-Claude runs `claude-plugin/skills/whiteboard/whiteboard.mjs`, which reads the board through `/api` and never writes. It gets:
+Claude gets these tools:
 
-- the frame rendered to PNG by `render/render.html`, using this fork's `exportScene`,
-- the original images in the frame,
-- the frame's text in reading order, links, embeds and hex colors.
+- `list_boards`: board names, ids and links.
+- `list_frames`: a board's frames.
+- `get_frame`: the frame rendered as an image, plus its text in reading order, links, exact hex colors and image ids. It renders the whole board when no frame is given.
+- `get_image`: one original image at full resolution.
 
-### Server
+The connector is a remote MCP server at `https://whiteboard.supa.company/mcp`. It has its own OAuth login, which asks for `MCP_USER` and `MCP_PASSWORD` once, when you connect. It never writes to boards.
 
-`rebuild.sh` builds the render page into `/var/www/excalidraw/render/`. It sits behind the same Caddy login and only issues GET requests. Run `rebuild.sh` once to deploy it. Until then, Claude still gets the images and text, without the composite PNG.
+### Server setup (once)
 
-### Login
+1. Copy the updated `whiteboard-sync` folder (`server.js`, `mcp/`, `package.json`) to `/home/ubuntu/whiteboard-sync`, then install Playwright and Chromium, which render the frames:
 
-The site uses its login form, so the script logs in with these variables and caches the session cookie in `~/.cache/whiteboard/`:
+   ```
+   cd /home/ubuntu/whiteboard-sync && npm install --omit=dev
+   sudo npx playwright install-deps chromium && npx playwright install chromium
+   ```
 
-- `WHITEBOARD_USER` and `WHITEBOARD_PASSWORD`, or `WHITEBOARD_COOKIE` with a ready `name=value` session cookie.
-- `WHITEBOARD_URL`, default `https://whiteboard.supa.company`.
+2. Add the connector login to the server's environment, next to `GITHUB_TOKEN`:
 
-### Install on your computer (Claude Code CLI or desktop)
+   ```
+   MCP_USER=<a username>
+   MCP_PASSWORD=<a long password>
+   ```
 
-```
-/plugin marketplace add thefranciscook/excalidraw
-/plugin install whiteboard@supa
-```
+   These are optional:
 
-Export `WHITEBOARD_USER` and `WHITEBOARD_PASSWORD` in your shell profile. For the rendered PNG, Playwright with Chromium must be installed:
+   - `PUBLIC_URL`, default `https://whiteboard.supa.company`.
+   - `WHITEBOARD_RENDER_DIR`, default `/var/www/excalidraw/render`.
 
-```
-npm i -g playwright && npx playwright install chromium
-```
+3. Let the connector's paths past the site login in Caddy. Caddy runs login directives such as `forward_auth` and `basic_auth` before `handle` blocks, so move the existing login and site directives into a second `handle`:
 
-Without it, you still get the images and text. Check the setup with this command:
+   ```
+   whiteboard.supa.company {
+   	@claude path /mcp /oauth/* /.well-known/oauth-authorization-server /.well-known/oauth-protected-resource /.well-known/oauth-protected-resource/* /.well-known/openid-configuration
+   	handle @claude {
+   		reverse_proxy 127.0.0.1:3010
+   	}
+   	handle {
+   		# the existing login, /api proxy and file_server go here, unchanged
+   	}
+   }
+   ```
 
-```
-node ~/.claude/plugins/marketplaces/supa/whiteboard-sync/claude-plugin/skills/whiteboard/whiteboard.mjs check
-```
+   `/api` stays behind the site login. The connector paths check their own tokens.
 
-The path can differ between Claude Code versions. You can also ask Claude to "check the whiteboard setup".
+4. Run `rebuild.sh`, which also builds the render page into `/var/www/excalidraw/render/`. Then restart `server.js`.
 
-### Install for Claude Code on the web
+5. Check it. This should answer 401 with a `WWW-Authenticate` header:
 
-Cloud sessions don't load plugins, but they do load skills committed to the repo. Copy `claude-plugin/skills/whiteboard/` into the website repo as `.claude/skills/whiteboard/` and commit it. Then, in that repo's cloud environment settings:
+   ```
+   curl -i -X POST https://whiteboard.supa.company/mcp
+   ```
 
-- Allow the host `whiteboard.supa.company` in the network settings.
-- Add `WHITEBOARD_USER` and `WHITEBOARD_PASSWORD` as environment variables. These are stored in plain text on the environment, so use a personal environment.
+Without Playwright or the render page, `get_frame` still works, but it sends the text and original images without a rendered picture. The server log says which one is missing.
 
-Playwright and Chromium are already installed in cloud sessions.
+### Connect Claude (once per account)
+
+- **claude.ai and the apps**: Settings, Connectors, Add custom connector. Enter `https://whiteboard.supa.company/mcp`, click Connect, and log in with `MCP_USER`/`MCP_PASSWORD`. Then turn the connector on in a chat's tools menu. Connectors added on claude.ai also show up in the desktop and mobile apps.
+- **Claude Code**:
+
+  ```
+  claude mcp add --transport http whiteboard https://whiteboard.supa.company/mcp
+  ```
+
+  Then run `/mcp` in Claude Code to log in.
+
+Tokens last an hour and refresh automatically for 90 days. To log every client out, delete `data/oauth.json` and restart `server.js`.
