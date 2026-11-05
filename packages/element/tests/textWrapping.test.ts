@@ -54,6 +54,27 @@ describe("Test wrapText", () => {
     });
   });
 
+  describe("indented paragraphs", () => {
+    it("should wrap an indented paragraph in line with its first line", () => {
+      expect(wrapText("    one two three", font, 100)).toEqual(
+        "    one\n    two\n    three",
+      );
+      expect(wrapText("foo\n  one two three\nbar", font, 100)).toEqual(
+        "foo\n  one two\n  three\nbar",
+      );
+    });
+
+    it("should wrap an indented list item below its text", () => {
+      expect(wrapText("    • one two three", font, 120)).toEqual(
+        "    • one\n      two\n      three",
+      );
+    });
+
+    it("should leave indented paragraphs that fit as they are", () => {
+      expect(wrapText("    one two", font, 200)).toEqual("    one two");
+    });
+  });
+
   it("should show the text correctly when max width reached", () => {
     const text = "Hello😀";
     const maxWidth = 10;
@@ -86,14 +107,16 @@ describe("Test wrapText", () => {
     const text = "  Hello  World";
     const maxWidth = 90;
     const res = wrapText(text, font, maxWidth);
-    expect(res).toBe("  Hello\nWorld");
+    // wrapped in line with the indented first line
+    expect(res).toBe("  Hello\n  World");
   });
 
   it("should keep some preceding whitespaces, trim trailing whitespaces, but kep those that fit in the trailing line", () => {
     const text = "   Hello  World            ";
     const maxWidth = 90;
     const res = wrapText(text, font, maxWidth);
-    expect(res).toBe("   Hello\nWorld    ");
+    // wrapped in line with the indented first line
+    expect(res).toBe("   Hello\n   World ");
   });
 
   it("should trim keep those whitespace that fit in the trailing line", () => {
@@ -308,17 +331,18 @@ describe("Test wrapText", () => {
 
       const maxWidth1 = 80;
       const res1 = wrapText(text, font, maxWidth1);
+      // indented paragraphs wrap in line with their first line
       expect(res1).toBe(`日本こんにちは！\nこれはテストで\nす。
-  見てみましょ\nう：円￥1234\n「高い」
-  （括弧）、読\n点、句点。
-  空白 改行\n全角記号…ー`);
+  見てみましょ\n  う：円\n  ￥1234\n  「高い」
+  （括弧）、読\n  点、句点。
+  空白 改行\n  全角記号…ー`);
 
       const maxWidth2 = 50;
       const res2 = wrapText(text, font, maxWidth2);
       expect(res2).toBe(`日本こんに\nちは！これ\nはテストで\nす。
-  見てみ\nましょう：\n円\n￥1234\n「高い」
-  （括\n弧）、読\n点、句点。
-  空白\n改行　全角\n記号…ー`);
+  見てみ\n  ましょ\n  う：円\n  ￥12\n  34\n  「高\n  い」
+  （括\n  弧）、\n  読点、\n  句点。
+  空白\n  改行\n  全角記\n  号…ー`);
     });
 
     it("should break Korean sentences", () => {
@@ -349,7 +373,7 @@ describe("Test wrapText", () => {
     it("should preserve leading whitespaces", () => {
       const maxWidth = 120;
       const res = wrapText(text, font, maxWidth);
-      expect(res).toBe("  \t   Hello\nworld");
+      expect(res).toBe("  \t   Hello\n      world");
     });
 
     it("should break and collapse leading whitespaces when line breaks", () => {
@@ -440,7 +464,7 @@ describe("Test wrapText", () => {
       {
         desc: "break all words when width of each word is less than container width",
         width: 70,
-        res: `Hello\n  whats\nup`,
+        res: `Hello\n  whats\n  up`,
       },
       {
         desc: "break all characters when width of each character is less than container width",

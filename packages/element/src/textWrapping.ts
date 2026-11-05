@@ -405,7 +405,7 @@ export const wrapText = (
     .split("\n")
     .map(
       (line) =>
-        wrapListItem(line, font, maxWidth, env) ??
+        wrapIndentedLine(line, font, maxWidth, env) ??
         getWrappedTextLines(line, font, maxWidth, env)
           .map((wrappedLine) => wrappedLine.text)
           .join("\n"),
@@ -415,27 +415,30 @@ export const wrapText = (
 
 /**
  * A list item's marker and the whitespace after it: `• `, `- `, `1. `,
- * `a) `, `(iv) `… (see `getListLineMarker`), with any indentation.
+ * `a) `, `(iv) `… (see `getListLineMarker`), with any indentation. Or, for
+ * other lines, just their indentation.
  */
-const LIST_ITEM_PREFIX_REGEX =
-  /^\s*(?:[•◦▪*-]|\(?(?:\d{1,3}|[a-zA-Z]|[ivxlc]{1,7})[.)])\s+(?=\S)/;
+const INDENT_PREFIX_REGEX =
+  /^(?:\s*(?:[•◦▪*-]|\(?(?:\d{1,3}|[a-zA-Z]|[ivxlc]{1,7})[.)])\s+|[ \t]+)(?=\S)/;
 
 /**
- * Wraps a list item with a hanging indent: its wrapped lines start below its
- * text, not below its marker.
+ * Wraps a list item or an indented paragraph with a hanging indent: its
+ * wrapped lines start below its text, not below its marker or at the left
+ * edge.
  *
  * The indent is made of spaces, so it's only in the wrapped text (`text`), not
  * in `originalText`. (The text editor wraps on its own, without it.)
  *
- * @returns null if the line isn't a list item, or doesn't need wrapping
+ * @returns null if the line isn't indented or a list item, or doesn't need
+ * wrapping
  */
-const wrapListItem = (
+const wrapIndentedLine = (
   line: string,
   font: FontString,
   maxWidth: number,
   env?: RenderEnvironment,
 ): string | null => {
-  const prefix = line.match(LIST_ITEM_PREFIX_REGEX)?.[0];
+  const prefix = line.match(INDENT_PREFIX_REGEX)?.[0];
   if (
     !prefix ||
     !Number.isFinite(maxWidth) ||

@@ -1009,6 +1009,40 @@ describe("textWysiwyg", () => {
       expect(textarea.value).toEqual(`Line#1\nLine#2`);
     });
 
+    it("should not indent a line the selection only ends at the start of", () => {
+      textarea.value = "Line#1\nLine#2\nLine#3";
+      // selection: "|Line#1\n|Line#2\nLine#3"
+      textarea.selectionStart = 0;
+      textarea.selectionEnd = 7;
+
+      fireEvent.keyDown(textarea, { key: KEYS.TAB });
+
+      expect(textarea.value).toEqual(`${tab}Line#1\nLine#2\nLine#3`);
+      // selection: "    |Line#1\n|Line#2\nLine#3"
+      expect(textarea.selectionStart).toEqual(4);
+      expect(textarea.selectionEnd).toEqual(11);
+    });
+
+    it("should indent and outdent with Ctrl/Cmd+] and Ctrl/Cmd+[", () => {
+      textarea.value = "Line#1";
+      textarea.selectionStart = 3;
+      textarea.selectionEnd = 3;
+
+      fireEvent.keyDown(textarea, {
+        code: CODES.BRACKET_RIGHT,
+        [KEYS.CTRL_OR_CMD]: true,
+      });
+      expect(textarea.value).toEqual(`${tab}Line#1`);
+      expect(textarea.selectionStart).toEqual(7);
+
+      fireEvent.keyDown(textarea, {
+        code: CODES.BRACKET_LEFT,
+        [KEYS.CTRL_OR_CMD]: true,
+      });
+      expect(textarea.value).toEqual("Line#1");
+      expect(textarea.selectionStart).toEqual(3);
+    });
+
     it("should resize text via shortcuts while in wysiwyg", () => {
       textarea.value = "abc def";
       const origFontSize = textElement.fontSize;

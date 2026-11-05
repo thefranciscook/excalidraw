@@ -1232,13 +1232,10 @@ export const textWysiwyg = ({
       event.preventDefault();
       if (event.isComposing) {
         return;
-      } else if (event.shiftKey || event.code === CODES.BRACKET_LEFT) {
-        outdent();
-      } else {
-        indent();
       }
-      // We must send an input event to resize the element
-      editable.dispatchEvent(new Event("input"));
+      reindentSelectedLines(
+        event.shiftKey || event.code === CODES.BRACKET_LEFT ? "out" : "in",
+      );
     }
   };
 
@@ -1266,96 +1263,61 @@ export const textWysiwyg = ({
   const TAB_SIZE = 4;
   const TAB = " ".repeat(TAB_SIZE);
   const RE_LEADING_TAB = new RegExp(`^ {1,${TAB_SIZE}}`);
-  const indent = () => {
-    const { selectionStart, selectionEnd } = editable;
-    const linesStartIndices = getSelectedLinesStartIndices();
-
-    let value = editable.value;
-    linesStartIndices.forEach((startIndex: number) => {
-      const startValue = value.slice(0, startIndex);
-      const endValue = value.slice(startIndex);
-
-      value = `${startValue}${TAB}${endValue}`;
-    });
-
-    editable.value = value;
-
-    editable.selectionStart = selectionStart + TAB_SIZE;
-    editable.selectionEnd = selectionEnd + TAB_SIZE * linesStartIndices.length;
-  };
-
-  const outdent = () => {
-    const { selectionStart, selectionEnd } = editable;
-    const linesStartIndices = getSelectedLinesStartIndices();
-    const removedTabs: number[] = [];
-
-    let value = editable.value;
-    linesStartIndices.forEach((startIndex) => {
-      const tabMatch = value
-        .slice(startIndex, startIndex + TAB_SIZE)
-        .match(RE_LEADING_TAB);
-
-      if (tabMatch) {
-        const startValue = value.slice(0, startIndex);
-        const endValue = value.slice(startIndex + tabMatch[0].length);
-
-        // Delete a tab from the line
-        value = `${startValue}${endValue}`;
-        removedTabs.push(startIndex);
-      }
-    });
-
-    editable.value = value;
-
-    if (removedTabs.length) {
-      if (selectionStart > removedTabs[removedTabs.length - 1]) {
-        editable.selectionStart = Math.max(
-          selectionStart - TAB_SIZE,
-          removedTabs[removedTabs.length - 1],
-        );
-      } else {
-        // If the cursor is before the first tab removed, ex:
-        // Line| #1
-        //     Line #2
-        // Lin|e #3
-        // we should reset the selectionStart to his initial value.
-        editable.selectionStart = selectionStart;
-      }
-      editable.selectionEnd = Math.max(
-        editable.selectionStart,
-        selectionEnd - TAB_SIZE * removedTabs.length,
-      );
-    }
-  };
 
   /**
-   * @returns indices of start positions of selected lines, in reverse order
+   * Indents (Tab, Ctrl/Cmd+]) or outdents (Shift+Tab, Ctrl/Cmd+[) the lines
+   * (paragraphs) the selection touches by one tab, in a single undoable edit.
+   * Wrapped lines of an indented paragraph line up with its first line (see
+   * `wrapText`).
    */
-  const getSelectedLinesStartIndices = () => {
-    let { selectionStart, selectionEnd, value } = editable;
+  const reindentSelectedLines = (direction: "in" | "out") => {
+    const { value, selectionStart, selectionEnd } = editable;
 
-    // chars before selectionStart on the same line
-    const startOffset = value.slice(0, selectionStart).match(/[^\n]*$/)![0]
-      .length;
-    // put caret at the start of the line
-    selectionStart = selectionStart - startOffset;
+    const blockStart = value.lastIndexOf("\n", selectionStart - 1) + 1;
+    // a selection ending at the very start of a line doesn't include that line
+    const lastLineAt =
+      selectionEnd > selectionStart && value[selectionEnd - 1] === "\n"
+        ? selectionEnd - 1
+        : selectionEnd;
+    const newlineAfter = value.indexOf("\n", lastLineAt);
+    const blockEnd = newlineAfter === -1 ? value.length : newlineAfter;
 
-    const selected = value.slice(selectionStart, selectionEnd);
+    const lines = value.slice(blockStart, blockEnd).split("\n");
+    const nextLines = lines.map((line) =>
+      direction === "in"
+        ? TAB + line
+        : line.slice(line.match(RE_LEADING_TAB)?.[0].length ?? 0),
+    );
+    const nextBlock = nextLines.join("\n");
+    if (nextBlock === value.slice(blockStart, blockEnd)) {
+      return;
+    }
 
-    return selected
-      .split("\n")
-      .reduce(
-        (startIndices, line, idx, lines) =>
-          startIndices.concat(
-            idx
-              ? // curr line index is prev line's start + prev line's length + \n
-                startIndices[idx - 1] + lines[idx - 1].length + 1
-              : // first selected line
-                selectionStart,
-          ),
-        [] as number[],
-      )
-      .reverse();
+    /** where a position ends up: moved with its text, not before its line */
+    const mapPosition = (position: number) => {
+      let lineStart = blockStart;
+      let shift = 0;
+      for (let index = 0; index < lines.length; index++) {
+        const lineEnd = lineStart + lines[index].length;
+        const delta = nextLines[index].length - lines[index].length;
+        if (position <= lineEnd) {
+          return Math.max(position + shift + delta, lineStart + shift);
+        }
+        lineStart = lineEnd + 1;
+        shift += delta;
+      }
+      return position + shift;
+    };
+
+    applyTextEdit({
+      start: blockStart,
+      end: blockEnd,
+      text: nextBlock,
+      selection: {
+        start: mapPosition(selectionStart),
+        end: mapPosition(selectionEnd),
+      },
+    });
   };
 
   const stopEvent = (event: Event) => {
