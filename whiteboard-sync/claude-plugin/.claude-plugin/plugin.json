@@ -1,0 +1,6 @@
+{
+  "name": "whiteboard",
+  "version": "0.1.0",
+  "description": "Look at boards and frames from the self-hosted Excalidraw at whiteboard.supa.company: rendered PNG, original images, text, links and colors.",
+  "author": { "name": "thefranciscook" }
+}

@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex" />
+    <title>Board render</title>
+    <script>
+      // fonts are emitted under /render/fonts/..., resolved against the origin
+      window.EXCALIDRAW_ASSET_PATH = window.origin;
+    </script>
+    <style>
+      body {
+        margin: 0;
+        font: 14px/1.4 system-ui, sans-serif;
+        background: #f4f4f5;
+        color: #18181b;
+      }
+      #status {
+        padding: 16px;
+      }
+      #out img {
+        display: block;
+        max-width: 100%;
+        margin: 0 auto;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="status">Rendering…</div>
+    <div id="out"></div>
+    <script type="module" src="./render.ts"></script>
+  </body>
+</html>

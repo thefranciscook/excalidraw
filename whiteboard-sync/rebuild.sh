@@ -12,6 +12,8 @@ yarn --frozen-lockfile --network-timeout 600000
 cp "$HERE/vite.selfhost.config.mts" excalidraw-app/
 cd excalidraw-app
 NODE_ENV=production VITE_APP_DISABLE_SENTRY=true NODE_OPTIONS=--max-old-space-size=1200 npx vite build --config vite.selfhost.config.mts
+# read-only render page (build/render/) for the Claude Code whiteboard plugin
+NODE_ENV=production VITE_APP_DISABLE_SENTRY=true NODE_OPTIONS=--max-old-space-size=1200 npx vite build --config ../whiteboard-sync/vite.render.config.mts
 rsync -a --delete build/ /var/www/excalidraw/
 "$HERE/deploy-extras.sh"
 yarn cache clean
