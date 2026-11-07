@@ -1,0 +1,111 @@
+.claude-banner {
+  --claude-banner-bg: #f0efff;
+  --claude-banner-bg-hover: var(--color-primary-light);
+  --claude-banner-border: var(--color-primary-light-darker);
+  --claude-banner-subtitle: #8b88e0;
+
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  cursor: pointer;
+  padding: 0 0.875rem 0 0.625rem;
+  border: 1px solid var(--claude-banner-border);
+  border-radius: var(--border-radius-lg);
+  background-color: var(--claude-banner-bg);
+  color: var(--color-primary);
+  font-family: var(--ui-font);
+  text-align: left;
+  box-sizing: border-box;
+  height: var(--lg-button-size);
+  white-space: nowrap;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+
+  &:hover {
+    background-color: var(--claude-banner-bg-hover);
+    border-color: var(--claude-banner-bg-hover);
+  }
+
+  &:active {
+    border-color: var(--color-brand-active);
+  }
+
+  &__icon {
+    display: flex;
+    flex-shrink: 0;
+
+    svg {
+      width: 1.25rem;
+      height: 1.25rem;
+    }
+  }
+
+  &__text {
+    display: flex;
+    flex-direction: column;
+    line-height: 1.15;
+  }
+
+  &__title {
+    font-size: 0.875rem;
+    font-weight: 600;
+  }
+
+  &__subtitle {
+    font-size: 0.75rem;
+    color: var(--claude-banner-subtitle);
+  }
+}
+
+.theme--dark .claude-banner {
+  --claude-banner-bg: #2b2a40;
+  --claude-banner-border: #4f4d6f;
+  --claude-banner-subtitle: #8f8cc4;
+}
+
+.excalidraw .ClaudeConnector {
+  .Dialog__content {
+    display: flex;
+    flex-direction: column;
+    gap: 1.25rem;
+  }
+
+  h3 {
+    margin: 0 0 0.5rem;
+    font-size: 1rem;
+  }
+
+  p,
+  ol {
+    margin: 0;
+    line-height: 1.5;
+  }
+
+  ol {
+    padding-left: 1.25rem;
+  }
+
+  code {
+    font-family: var(--font-family-code, monospace);
+    font-size: 0.875em;
+  }
+
+  a {
+    color: var(--color-primary);
+  }
+
+  &__intro {
+    color: var(--text-primary-color);
+  }
+
+  &__note {
+    margin-top: 0.5rem !important;
+    font-size: 0.875rem;
+    color: var(--color-gray-50, #888);
+  }
+
+  &__copyRow {
+    display: flex;
+    align-items: flex-end;
+    gap: 0.5rem;
+  }
+}

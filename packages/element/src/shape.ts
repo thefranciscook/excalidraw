@@ -192,12 +192,22 @@ const frameOutlineCache = new WeakMap<
  * (rough) rectangle pipeline. Cached per frame element, so its shape is cached
  * by `ShapeCache` too and regenerated only when the frame changes; the frame's
  * seed keeps the hand-drawn wobble stable.
+ *
+ * Frames are mutated in place while they're drawn or resized (same object,
+ * new version), so the cached stand-in is only reused while it still matches
+ * the frame's version and size.
  */
 export const getFrameOutlineElement = (
   frame: ExcalidrawFrameElement,
 ): ExcalidrawRectangleElement => {
   let outline = frameOutlineCache.get(frame);
-  if (!outline) {
+  if (
+    !outline ||
+    outline.version !== frame.version ||
+    outline.versionNonce !== frame.versionNonce ||
+    outline.width !== frame.width ||
+    outline.height !== frame.height
+  ) {
     const { name, ...base } = frame;
     outline = {
       ...base,

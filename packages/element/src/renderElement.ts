@@ -1163,12 +1163,17 @@ const drawElement = (
           );
           context.lineJoin = "round";
           context.lineCap = "round";
-          rc.draw(
-            ShapeCache.generateElementShape(
-              getFrameOutlineElement(element),
-              renderConfig,
-            ),
-          );
+          // draw through `context`'s own canvas: the `rc` passed in can
+          // belong to another canvas (the new-element canvas gets the static
+          // scene's rc while a frame is being drawn)
+          rough
+            .canvas(context.canvas)
+            .draw(
+              ShapeCache.generateElementShape(
+                getFrameOutlineElement(element),
+                renderConfig,
+              ),
+            );
         });
       }
       break;
