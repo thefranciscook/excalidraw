@@ -20,6 +20,7 @@ import {
 } from "@excalidraw/math";
 import {
   ROUGHNESS,
+  ROUNDNESS,
   THEME,
   isTransparent,
   assertNever,
@@ -78,6 +79,8 @@ import type {
   ExcalidrawFreeDrawElement,
   ElementsMap,
   ExcalidrawLineElement,
+  ExcalidrawFrameElement,
+  ExcalidrawRectangleElement,
   Arrowhead,
 } from "./types";
 
@@ -168,6 +171,50 @@ export class ShapeCache {
     return shape;
   };
 }
+
+/**
+ * How a frame's outline looks: like a default hand-drawn rectangle, in black
+ * (dark mode inverts it like any other black stroke).
+ */
+export const FRAME_OUTLINE_STYLE = {
+  strokeColor: "#1e1e1e",
+  strokeWidth: 2,
+  roughness: ROUGHNESS.artist,
+} as const;
+
+const frameOutlineCache = new WeakMap<
+  ExcalidrawFrameElement,
+  ExcalidrawRectangleElement
+>();
+
+/**
+ * A stand-in rectangle for drawing a frame's outline through the regular
+ * (rough) rectangle pipeline. Cached per frame element, so its shape is cached
+ * by `ShapeCache` too and regenerated only when the frame changes; the frame's
+ * seed keeps the hand-drawn wobble stable.
+ */
+export const getFrameOutlineElement = (
+  frame: ExcalidrawFrameElement,
+): ExcalidrawRectangleElement => {
+  let outline = frameOutlineCache.get(frame);
+  if (!outline) {
+    const { name, ...base } = frame;
+    outline = {
+      ...base,
+      type: "rectangle",
+      strokeColor: FRAME_OUTLINE_STYLE.strokeColor,
+      strokeWidth: FRAME_OUTLINE_STYLE.strokeWidth,
+      roughness: FRAME_OUTLINE_STYLE.roughness,
+      strokeStyle: "solid",
+      backgroundColor: "transparent",
+      fillStyle: "solid",
+      roundness: { type: ROUNDNESS.ADAPTIVE_RADIUS },
+      opacity: 100,
+    };
+    frameOutlineCache.set(frame, outline);
+  }
+  return outline;
+};
 
 const getDashArrayDashed = (strokeWidth: number) => [8, 8 + strokeWidth];
 

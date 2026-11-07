@@ -42,7 +42,7 @@ import { getContainingFrame, isFrameClippable } from "@excalidraw/element";
 
 import { getCornerRadius, isPathALoop } from "@excalidraw/element";
 
-import { ShapeCache } from "@excalidraw/element";
+import { ShapeCache, getFrameOutlineElement } from "@excalidraw/element";
 import {
   getStickyNoteFooter,
   getStickyNotePathCommands,
@@ -749,7 +749,31 @@ const renderElementToSvg = (
       break;
     }
     // frames are not rendered and only acts as a container
-    case "frame":
+    case "frame": {
+      // hand-drawn black outline, drawn like a rectangle
+      if (
+        renderConfig.frameRendering.enabled &&
+        renderConfig.frameRendering.outline
+      ) {
+        const node = roughSVGDrawWithPrecision(
+          rsvg,
+          ShapeCache.generateElementShape(
+            getFrameOutlineElement(element),
+            renderConfig,
+          ),
+          MAX_DECIMALS_FOR_SVG_EXPORT,
+        );
+        node.setAttribute("stroke-linecap", "round");
+        node.setAttribute(
+          "transform",
+          `translate(${offsetX || 0} ${
+            offsetY || 0
+          }) rotate(${degree} ${cx} ${cy})`,
+        );
+        addToRoot(node, element);
+      }
+      break;
+    }
     case "magicframe": {
       if (
         renderConfig.frameRendering.enabled &&
