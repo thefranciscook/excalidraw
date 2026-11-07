@@ -27,6 +27,8 @@ Claude gets these tools:
 - `get_frame`: the frame rendered as an image, plus its text in reading order, links, exact hex colors and image ids. It renders the whole board when no frame is given.
 - `get_image`: one original image at full resolution.
 
+In claude.ai and the Claude desktop app, `get_frame` and `get_image` also show their picture to you in the chat, with an "Open in whiteboard" button (`mcp/view.js`, an [MCP App](https://claude.com/docs/connectors/building/mcp-apps/quickstart)). Other clients, such as Claude Code, get the same results without the view. The view needs the `@modelcontextprotocol/ext-apps` package from `npm install`; without it the server logs a warning and the tools work as before.
+
 The connector is a remote MCP server at `https://whiteboard.supa.company/mcp`. It has its own OAuth login, which asks for `MCP_USER` and `MCP_PASSWORD` once, when you connect. It never writes to boards.
 
 ### Server setup (once)
