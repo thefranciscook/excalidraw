@@ -7,6 +7,7 @@ import {
 } from "@excalidraw/common";
 
 import { pointFrom } from "@excalidraw/math";
+import { getFrameOutlineElement, mutateElement } from "@excalidraw/element";
 
 import type {
   ExcalidrawTextElement,
@@ -546,6 +547,20 @@ describe("frame outline", () => {
     const first = await outlinePath();
     expect(first).toBeTruthy();
     expect(await outlinePath()).toBe(first);
+  });
+
+  it("follows a frame that is resized in place, as while drawing it", () => {
+    // a frame starts at 0×0 and grows as it's dragged out
+    const frame = API.createElement({ type: "frame", width: 0, height: 0 });
+    const initial = getFrameOutlineElement(frame);
+    expect(getFrameOutlineElement(frame)).toBe(initial); // cached
+
+    mutateElement(frame, new Map(), { width: 300, height: 200 });
+
+    const resized = getFrameOutlineElement(frame);
+    expect(resized).not.toBe(initial);
+    expect(resized.width).toBe(300);
+    expect(resized.height).toBe(200);
   });
 });
 
