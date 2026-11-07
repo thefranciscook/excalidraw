@@ -514,6 +514,41 @@ describe("export background", () => {
   });
 });
 
+describe("frame outline", () => {
+  it("draws frames hand-drawn and black, like a rectangle", async () => {
+    const frame = API.createElement({ type: "frame", width: 300, height: 200 });
+
+    const svg = await exportScene({
+      type: "svg",
+      data: { elements: [frame] },
+      config: { skipInliningFonts: true },
+    });
+
+    // a rough path, not the old flat grey rounded <rect>
+    const outline = svg.querySelector('path[stroke="#1e1e1e"]');
+    expect(outline).not.toBeNull();
+    expect(svg.querySelector('rect[stroke="#bbb"]')).toBeNull();
+  });
+
+  it("keeps the same wobble for the same frame", async () => {
+    const frame = API.createElement({ type: "frame", width: 300, height: 200 });
+    const outlinePath = async () =>
+      (
+        await exportScene({
+          type: "svg",
+          data: { elements: [frame] },
+          config: { skipInliningFonts: true },
+        })
+      )
+        .querySelector('path[stroke="#1e1e1e"]')
+        ?.getAttribute("d");
+
+    const first = await outlinePath();
+    expect(first).toBeTruthy();
+    expect(await outlinePath()).toBe(first);
+  });
+});
+
 describe("export inputs", () => {
   it("takes only the scene settings from data.appState", async () => {
     const renderSpy = vi.spyOn(staticSceneModule, "renderStaticScene");

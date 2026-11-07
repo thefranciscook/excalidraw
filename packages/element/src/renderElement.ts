@@ -79,7 +79,7 @@ import {
 import { getContainingFrame } from "./frame";
 import { getCornerRadius } from "./utils";
 
-import { ShapeCache } from "./shape";
+import { ShapeCache, getFrameOutlineElement } from "./shape";
 import {
   getStickyNoteFooter,
   getStickyNotePathCommands,
@@ -1153,8 +1153,27 @@ const drawElement = (
   renderState: ElementRenderState,
 ) => {
   switch (element.type) {
-    case "magicframe":
     case "frame": {
+      // hand-drawn black outline, drawn like a rectangle
+      if (appState.frameRendering.enabled && appState.frameRendering.outline) {
+        withSavedContext(context, () => {
+          context.translate(
+            element.x + appState.scrollX,
+            element.y + appState.scrollY,
+          );
+          context.lineJoin = "round";
+          context.lineCap = "round";
+          rc.draw(
+            ShapeCache.generateElementShape(
+              getFrameOutlineElement(element),
+              renderConfig,
+            ),
+          );
+        });
+      }
+      break;
+    }
+    case "magicframe": {
       if (appState.frameRendering.enabled && appState.frameRendering.outline) {
         withSavedContext(context, () => {
           context.translate(
