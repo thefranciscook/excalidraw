@@ -147,6 +147,7 @@ import { ExcalidrawPlusIframeExport } from "./ExcalidrawPlusIframeExport";
 import "./index.scss";
 
 import { AppSidebar } from "./components/AppSidebar";
+import { ClaudeConnectorBanner } from "./components/ClaudeConnectorBanner";
 
 import type { CollabAPI } from "./collab/Collab";
 
@@ -1008,20 +1009,31 @@ const ExcalidrawWrapper = () => {
         theme={editorTheme}
         onThemeChange={setAppTheme}
         renderTopRightUI={(isMobile) => {
-          if (isMobile || !collabAPI || !isCollabAvailable) {
+          if (isMobile) {
+            return null;
+          }
+          const showConnectorBanner =
+            excalidrawAPI?.getEditorInterface().formFactor === "desktop";
+          const showCollab = !!collabAPI && isCollabAvailable;
+          if (!showConnectorBanner && !showCollab) {
             return null;
           }
 
           return (
             <div className="excalidraw-ui-top-right">
-              {collabError.message && <CollabError collabError={collabError} />}
-              <LiveCollaborationTrigger
-                isCollaborating={isCollaborating}
-                onSelect={() =>
-                  setShareDialogState({ isOpen: true, type: "share" })
-                }
-                editorInterface={editorInterface}
-              />
+              {showConnectorBanner && <ClaudeConnectorBanner />}
+              {showCollab && collabError.message && (
+                <CollabError collabError={collabError} />
+              )}
+              {showCollab && (
+                <LiveCollaborationTrigger
+                  isCollaborating={isCollaborating}
+                  onSelect={() =>
+                    setShareDialogState({ isOpen: true, type: "share" })
+                  }
+                  editorInterface={editorInterface}
+                />
+              )}
             </div>
           );
         }}
