@@ -88,5 +88,6 @@ Without Playwright or the render page, `get_frame` still works, but it sends the
   ```
 
   Then run `/mcp` in Claude Code to log in.
+- **ChatGPT** (developer mode): Settings, Apps, Create app. Enter `https://whiteboard.supa.company/mcp` as the server URL, choose OAuth, and log in with `MCP_USER`/`MCP_PASSWORD`. The login only sends you back to Claude, ChatGPT (`chatgpt.com`, `openai.com`) or loopback addresses.
 
 Tokens last an hour and refresh automatically for 90 days. To log every client out, delete `data/oauth.json` and restart `server.js`.

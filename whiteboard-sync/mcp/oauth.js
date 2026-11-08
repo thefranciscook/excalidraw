@@ -22,8 +22,9 @@ const LOGIN_WINDOW_MS = 15 * 60 * 1000;
 const MAX_FAILED_LOGINS = 10;
 const SCOPE = "whiteboard";
 
-// Where clients may send the user back to: Claude's callback, and local
-// clients (Claude Code, MCP Inspector) on loopback.
+// Where clients may send the user back to: Claude's and ChatGPT's callbacks,
+// and local clients (Claude Code, MCP Inspector) on loopback.
+const HTTPS_REDIRECT_DOMAINS = ["claude.ai", "claude.com", "chatgpt.com", "openai.com"];
 const isAllowedRedirect = (uri) => {
   let u;
   try {
@@ -33,7 +34,7 @@ const isAllowedRedirect = (uri) => {
   }
   if (u.hash) return false;
   if (u.protocol === "https:") {
-    return ["claude.ai", "claude.com"].includes(u.hostname) || u.hostname.endsWith(".claude.ai") || u.hostname.endsWith(".claude.com");
+    return HTTPS_REDIRECT_DOMAINS.some((d) => u.hostname === d || u.hostname.endsWith(`.${d}`));
   }
   return u.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(u.hostname);
 };
@@ -142,7 +143,7 @@ module.exports = function createOAuth({ dataDir, publicUrl, user, password }) {
     const body = await readBody(req);
     const uris = body && body.redirect_uris;
     if (!Array.isArray(uris) || !uris.length || !uris.every((u) => typeof u === "string" && isAllowedRedirect(u))) {
-      return oauthError(res, 400, "invalid_redirect_uri", "Only Claude's callback and loopback redirect URIs are allowed.");
+      return oauthError(res, 400, "invalid_redirect_uri", "Only Claude's and ChatGPT's callbacks and loopback redirect URIs are allowed.");
     }
     const authMethod = ["client_secret_post", "client_secret_basic"].includes(body.token_endpoint_auth_method)
       ? body.token_endpoint_auth_method
@@ -191,7 +192,7 @@ module.exports = function createOAuth({ dataDir, publicUrl, user, password }) {
     res.writeHead(status, {
       "Content-Type": "text/html; charset=utf-8",
       "Cache-Control": "no-store",
-      "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; form-action 'self' https://claude.ai https://claude.com http://localhost:* http://127.0.0.1:*; frame-ancestors 'none'",
+      "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; form-action 'self' https://claude.ai https://*.claude.ai https://claude.com https://*.claude.com https://chatgpt.com https://*.chatgpt.com https://*.openai.com http://localhost:* http://127.0.0.1:*; frame-ancestors 'none'",
       "X-Frame-Options": "DENY",
     });
     res.end(`<!doctype html><html lang="en"><head><meta charset="utf-8">
