@@ -154,11 +154,44 @@
         db.close();
         cb(found);
       };
+      // always call back, or the uploader would wait forever
+      tx.onabort = function () {
+        db.close();
+        console.error("[server-sync] couldn't read images", tx.error);
+        cb(found);
+      };
     };
     req.onerror = function () {
       console.error("[server-sync] couldn't read images", req.error);
       cb({});
     };
+  };
+
+  // fetch with a time limit, so one stalled request can't hold up the rest
+  var fetchWithin = function (ms, url, opts) {
+    opts = opts || {};
+    if (!window.AbortController) return fetch(url, opts);
+    var ctrl = new AbortController();
+    var timer = setTimeout(function () {
+      ctrl.abort();
+    }, ms);
+    opts.signal = ctrl.signal;
+    return fetch(url, opts).then(
+      function (res) {
+        clearTimeout(timer);
+        return res;
+      },
+      function (e) {
+        clearTimeout(timer);
+        throw e;
+      },
+    );
+  };
+
+  // A request answered by the site login (redirected to its page) instead of
+  // /api is not a success, even though it ends in a 200.
+  var apiOk = function (res) {
+    return res.ok && !res.redirected;
   };
 
   // fileIds of the board's images, nearest to the middle of the view first
@@ -202,28 +235,72 @@
   // the board has images that neither this browser nor the server has yet
   // (e.g. another device is still uploading them)
   var waitingForServer = false;
+  // the server's image list couldn't be fetched (retried every 15s)
+  var listFailed = false;
+  // images on this board that are in this browser but not on the server yet
+  var notUploaded = {};
+  // images on this board that are neither here nor on the server, with the
+  // time each was first seen missing (a just-pasted image takes a moment to
+  // reach the image store)
+  var missingSince = {};
+  var MISSING_GRACE_MS = 10000;
+
+  // Lets the app's clean-up of old images keep the ones the server doesn't
+  // have: they may be the only copy (LocalData.ts, clearObsoleteFiles).
+  window.wbServerHasFile = function (id) {
+    return !!(onServer && onServer[id]);
+  };
+
+  var plural = function (n) {
+    return n + (n === 1 ? " image" : " images");
+  };
 
   var statusEl = null;
   var showStatus = function () {
     if (!statusEl) return;
     var text = "";
+    var warn = false;
+    var now = Date.now();
+    var missing = Object.keys(missingSince).filter(function (id) {
+      return now - missingSince[id] > MISSING_GRACE_MS;
+    }).length;
+    var unsent = Object.keys(notUploaded);
+    var failedUploads = unsent.filter(function (id) {
+      return retryAt[id] > now;
+    }).length;
     if (Object.keys(downloading).length) {
       text = "Loading images " + batchDone + "/" + Object.keys(batch).length;
     } else {
       batch = {};
       batchDone = 0;
       var failed = Object.keys(downloadRetryAt).length;
-      if (failed) text = failed + (failed === 1 ? " image" : " images") + " couldn't load. Retrying…";
+      if (failed) text = plural(failed) + " couldn't load. Retrying…";
+    }
+    if (!text && failedUploads) {
+      text = plural(failedUploads) + " couldn't be saved to the server. Retrying… Keep this tab open.";
+      warn = true;
+    } else if (!text && unsent.length) {
+      text = "Saving " + plural(unsent.length) + " to the server…";
+    } else if (!text && listFailed) {
+      text = "Can't reach image storage. Images added here aren't backed up yet. Retrying…";
+      warn = true;
+    }
+    if (!text && missing) {
+      text =
+        plural(missing) +
+        " never reached the server. Open this board on the device they were added on to upload them.";
+      warn = true;
     }
     statusEl.textContent = text;
+    statusEl.className = warn ? "wb-warn" : "";
     statusEl.style.display = text ? "" : "none";
   };
 
   var download = function (id, next) {
-    fetch(FILES_API + "/" + id)
+    fetchWithin(120000, FILES_API + "/" + id)
       .then(function (res) {
         if (res.status === 404) delete onServer[id];
-        if (!res.ok) throw new Error("HTTP " + res.status);
+        if (!apiOk(res)) throw new Error("HTTP " + res.status);
         return res.json();
       })
       .then(function (file) {
@@ -299,13 +376,16 @@
     }
   };
 
+  // Until this succeeds, nothing is uploaded or downloaded, so a failure is
+  // retried (every 15s) rather than leaving images unsaved for the visit.
   var syncFiles = function () {
-    fetch(FILES_API, { cache: "no-store" })
+    fetchWithin(30000, FILES_API, { cache: "no-store" })
       .then(function (res) {
-        return res.ok ? res.json() : null;
+        if (!apiOk(res)) throw new Error("HTTP " + res.status);
+        return res.json();
       })
       .then(function (ids) {
-        if (!ids) return;
+        listFailed = false;
         onServer = onServer || {};
         ids.forEach(function (id) {
           onServer[id] = 1;
@@ -313,47 +393,70 @@
         fetchMissingFiles();
       })
       .catch(function (e) {
+        listFailed = true;
         console.error("[server-sync] couldn't list images", e);
-      });
+      })
+      .then(showStatus);
   };
 
   // Upload images on the board that the server doesn't have yet, one at a time.
   var uploading = false;
   var pushFiles = function () {
     if (!onServer || uploading) return;
-    var now = Date.now();
     var ids = imageFileIds().filter(function (id) {
-      return !onServer[id] && !(retryAt[id] > now);
+      return !onServer[id];
     });
-    if (!ids.length) return;
+    if (!ids.length) {
+      notUploaded = {};
+      missingSince = {};
+      showStatus();
+      return;
+    }
     uploading = true;
     // images not in the store yet (still being added) are picked up next time
     readFiles(ids, function (files) {
-      var queue = Object.keys(files);
+      var now = Date.now();
+      notUploaded = {};
+      var stillMissing = {};
+      ids.forEach(function (id) {
+        if (files[id]) notUploaded[id] = 1;
+        else stillMissing[id] = missingSince[id] || now;
+      });
+      missingSince = stillMissing;
+      showStatus();
+      var queue = Object.keys(files).filter(function (id) {
+        return !(retryAt[id] > now);
+      });
       var next = function () {
         var id = queue.shift();
         if (!id) {
           uploading = false;
+          showStatus();
           return;
         }
-        fetch(FILES_API + "/" + id, {
+        var failed = function (why) {
+          retryAt[id] = Date.now() + 30000;
+          console.error("[server-sync] image upload failed", id, why);
+        };
+        fetchWithin(180000, FILES_API + "/" + id, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ mimeType: files[id].mimeType, dataURL: files[id].dataURL }),
         })
           .then(function (res) {
-            if (res.ok) {
+            if (apiOk(res)) {
               onServer[id] = 1;
+              delete notUploaded[id];
+              delete retryAt[id];
             } else {
-              retryAt[id] = Date.now() + 60000;
-              console.error("[server-sync] image upload failed", id, res.status);
+              failed(res.redirected ? "redirected to " + res.url : res.status);
             }
           })
-          .catch(function (e) {
-            retryAt[id] = Date.now() + 60000;
-            console.error("[server-sync] image upload failed", id, e);
-          })
-          .then(next);
+          .catch(failed)
+          .then(function () {
+            showStatus();
+            next();
+          });
       };
       next();
     });
@@ -400,7 +503,7 @@
     pushing = true;
     fetch(API, { method: "PUT", headers: { "Content-Type": "application/json" }, body: buildPayload() })
       .then(function (res) {
-        if (res.ok) {
+        if (apiOk(res)) {
           setServerVersion(v);
         } else if (res.status === 409) {
           // another device saved something newer; take it
@@ -410,7 +513,7 @@
             syncFiles();
           });
         } else {
-          console.error("[server-sync] save failed", res.status);
+          console.error("[server-sync] save failed", res.redirected ? "redirected to " + res.url : res.status);
         }
       })
       .catch(function (e) {
@@ -427,7 +530,7 @@
     if (document.hidden || localVersion() > serverVersion) return;
     fetch(API, { cache: "no-store" })
       .then(function (res) {
-        return res.status === 200 ? res.json() : null;
+        return res.status === 200 && !res.redirected ? res.json() : null;
       })
       .then(function (scene) {
         if (scene && scene.savedAt > localVersion()) {
@@ -455,7 +558,7 @@
   }, 2000);
   setInterval(function () {
     pull();
-    if (waitingForServer && !document.hidden) syncFiles();
+    if ((waitingForServer || listFailed) && !document.hidden) syncFiles();
   }, 15000);
   document.addEventListener("visibilitychange", function () {
     if (document.hidden) return flush();
@@ -467,6 +570,12 @@
     retryDownloadsIfDue();
   });
   window.addEventListener("pagehide", flush);
+  // closing the tab now could lose the only copy of an image
+  window.addEventListener("beforeunload", function (event) {
+    if (!Object.keys(notUploaded).length) return;
+    event.preventDefault();
+    event.returnValue = "";
+  });
 
   // 4. "All boards" button and board name in the tab title.
   var addBackButton = function () {
@@ -482,6 +591,8 @@
       "border-radius:8px;font:500 13px/1.2 system-ui,sans-serif;white-space:nowrap;pointer-events:none;" +
       "background:#ececf4;color:#1b1b1f;box-shadow:0 0 0 1px #e0e0ea}" +
       "html.wb-dark #wb-status{background:#232329;color:#e3e3e8;box-shadow:0 0 0 1px #2e2d39}" +
+      "#wb-status.wb-warn{background:#fff4d6;color:#5c3d00;box-shadow:0 0 0 1px #f0c24b;white-space:normal;max-width:min(90vw,520px);text-align:center}" +
+      "html.wb-dark #wb-status.wb-warn{background:#3d2f0d;color:#ffe2a0;box-shadow:0 0 0 1px #7a5c14}" +
       "@media (max-width:730px){#wb-status{top:24px}}";
     document.head.appendChild(style);
     var a = document.createElement("a");
