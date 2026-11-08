@@ -724,6 +724,11 @@ const ExcalidrawWrapper = () => {
     appState: AppState,
     files: BinaryFiles,
   ) => {
+    // self-hosted whiteboard (whiteboard-sync/server-sync.js): uploads images
+    // straight from here, so an image whose save to IndexedDB fails (which
+    // isn't retried) still reaches the server
+    (window as { wbOnFiles?: (files: BinaryFiles) => void }).wbOnFiles?.(files);
+
     if (collabAPI?.isCollaborating()) {
       collabAPI.syncElements(elements);
     }

@@ -93,9 +93,9 @@
   // Put any missing ones into Excalidraw's image store (IndexedDB "files-db",
   // same layout as idb-keyval's createStore), then have it reload images.
   // Calls back with an error, or null once the files are stored.
-  var storeFiles = function (files, done) {
+  var storeFiles = function (files, done, quiet) {
     var finish = function (err, added) {
-      if (added) notifyExcalidraw();
+      if (added && !quiet) notifyExcalidraw();
       if (done) done(err);
     };
     var req = indexedDB.open("files-db");
@@ -154,11 +154,44 @@
         db.close();
         cb(found);
       };
+      // always call back, or the uploader would wait forever
+      tx.onabort = function () {
+        db.close();
+        console.error("[server-sync] couldn't read images", tx.error);
+        cb(found);
+      };
     };
     req.onerror = function () {
       console.error("[server-sync] couldn't read images", req.error);
       cb({});
     };
+  };
+
+  // fetch with a time limit, so one stalled request can't hold up the rest
+  var fetchWithin = function (ms, url, opts) {
+    opts = opts || {};
+    if (!window.AbortController) return fetch(url, opts);
+    var ctrl = new AbortController();
+    var timer = setTimeout(function () {
+      ctrl.abort();
+    }, ms);
+    opts.signal = ctrl.signal;
+    return fetch(url, opts).then(
+      function (res) {
+        clearTimeout(timer);
+        return res;
+      },
+      function (e) {
+        clearTimeout(timer);
+        throw e;
+      },
+    );
+  };
+
+  // A request answered by the site login (redirected to its page) instead of
+  // /api is not a success, even though it ends in a 200.
+  var apiOk = function (res) {
+    return res.ok && !res.redirected;
   };
 
   // fileIds of the board's images, nearest to the middle of the view first
@@ -202,28 +235,114 @@
   // the board has images that neither this browser nor the server has yet
   // (e.g. another device is still uploading them)
   var waitingForServer = false;
+  // the server's image list couldn't be fetched (retried every 15s)
+  var listFailed = false;
+  // The order for every image added here: 1. save it on this device,
+  // 2. upload it, 3. say how that's going. Nothing waits on step 1: the
+  // editor hands over its images as they are added (wbOnFiles, from
+  // excalidraw-app App.tsx), so an image is uploaded even if saving it on
+  // this device fails, and saving it here is retried, which the editor
+  // doesn't do.
+  var memFiles = {};
+  window.wbOnFiles = function (files) {
+    memFiles = files || {};
+  };
+
+  // Lets the app's clean-up of old images keep the ones the server doesn't
+  // have: they may be the only copy (LocalData.ts, clearObsoleteFiles).
+  window.wbServerHasFile = function (id) {
+    return !!(onServer && onServer[id]);
+  };
+
+  // Ask the browser not to clear this site's storage when space runs low.
+  try {
+    if (navigator.storage && navigator.storage.persist) navigator.storage.persist();
+  } catch (e) {}
+
+  // State of the board's images that the server doesn't have yet:
+  var notUploaded = {}; // here (on this device or in this tab), not uploaded
+  var unstoredSince = {}; // only in this tab, not saved on this device; since when
+  var missingSince = {}; // nowhere: not here, not on the server; since when
+  var localSaveFailed = false;
+  var savedUntil = 0; // show "saved" briefly after the last upload
+  // a just-added image takes a moment to reach this device's image store
+  var STORE_GRACE_MS = 5000;
+  var MISSING_GRACE_MS = 10000;
+
+  var plural = function (n) {
+    return n + (n === 1 ? " image" : " images");
+  };
+  var isAre = function (n) {
+    return n === 1 ? " isn't" : " aren't";
+  };
+  var since = function (map, ms) {
+    var now = Date.now();
+    return Object.keys(map).filter(function (id) {
+      return now - map[id] > ms;
+    }).length;
+  };
 
   var statusEl = null;
   var showStatus = function () {
     if (!statusEl) return;
+    var now = Date.now();
+    var unsent = Object.keys(notUploaded);
+    var failedUploads = unsent.filter(function (id) {
+      return retryAt[id] > now;
+    }).length;
+    var onlyInTab = since(unstoredSince, STORE_GRACE_MS);
+    var missing = since(missingSince, MISSING_GRACE_MS);
     var text = "";
-    if (Object.keys(downloading).length) {
+    var warn = true;
+    if (onlyInTab) {
+      text =
+        plural(onlyInTab) +
+        " couldn't be saved on this device" +
+        (localSaveFailed ? " (its storage may be full)" : "") +
+        " and" +
+        isAre(onlyInTab) +
+        " on the server yet. Don't close this tab.";
+    } else if (failedUploads) {
+      // (only claim they're saved here once that's known)
+      text =
+        plural(failedUploads) +
+        " couldn't be uploaded yet. Retrying…" +
+        (Object.keys(unstoredSince).length ? " Don't close this tab." : " They're saved on this device.");
+    } else if (listFailed && unsent.length) {
+      text = "Can't reach the server. " + plural(unsent.length) + " saved on this device only, for now. Retrying…";
+    } else if (Object.keys(downloading).length) {
       text = "Loading images " + batchDone + "/" + Object.keys(batch).length;
-    } else {
+      warn = false;
+    } else if (Object.keys(downloadRetryAt).length) {
+      text = plural(Object.keys(downloadRetryAt).length) + " couldn't load. Retrying…";
+      warn = false;
+    } else if (unsent.length) {
+      text = "Uploading " + plural(unsent.length) + "…";
+      warn = false;
+    } else if (missing) {
+      text =
+        plural(missing) +
+        " on this board never reached the server and" +
+        isAre(missing) +
+        " on this device. Open the board where they were added to upload them.";
+    } else if (savedUntil > now) {
+      text = "Images saved";
+      warn = false;
+    }
+    if (!Object.keys(downloading).length) {
       batch = {};
       batchDone = 0;
-      var failed = Object.keys(downloadRetryAt).length;
-      if (failed) text = failed + (failed === 1 ? " image" : " images") + " couldn't load. Retrying…";
     }
     statusEl.textContent = text;
+    statusEl.className = warn ? "wb-warn" : "";
     statusEl.style.display = text ? "" : "none";
   };
 
   var download = function (id, next) {
-    fetch(FILES_API + "/" + id)
+    fetchWithin(120000, FILES_API + "/" + id)
       .then(function (res) {
         if (res.status === 404) delete onServer[id];
-        if (!res.ok) throw new Error("HTTP " + res.status);
+        if (!apiOk(res)) throw new Error("HTTP " + res.status);
         return res.json();
       })
       .then(function (file) {
@@ -299,13 +418,16 @@
     }
   };
 
+  // Until this succeeds, nothing is uploaded or downloaded, so a failure is
+  // retried (every 15s) rather than leaving images unsaved for the visit.
   var syncFiles = function () {
-    fetch(FILES_API, { cache: "no-store" })
+    fetchWithin(30000, FILES_API, { cache: "no-store" })
       .then(function (res) {
-        return res.ok ? res.json() : null;
+        if (!apiOk(res)) throw new Error("HTTP " + res.status);
+        return res.json();
       })
       .then(function (ids) {
-        if (!ids) return;
+        listFailed = false;
         onServer = onServer || {};
         ids.forEach(function (id) {
           onServer[id] = 1;
@@ -313,47 +435,111 @@
         fetchMissingFiles();
       })
       .catch(function (e) {
+        listFailed = true;
         console.error("[server-sync] couldn't list images", e);
-      });
+      })
+      .then(showStatus);
   };
 
-  // Upload images on the board that the server doesn't have yet, one at a time.
+  // Every 2s: for the board's images the server doesn't have, make sure each
+  // is saved on this device, and upload them one at a time.
   var uploading = false;
+  var storeRetryAt = 0;
   var pushFiles = function () {
-    if (!onServer || uploading) return;
-    var now = Date.now();
+    if (uploading) return;
     var ids = imageFileIds().filter(function (id) {
-      return !onServer[id] && !(retryAt[id] > now);
+      return !(onServer && onServer[id]);
     });
-    if (!ids.length) return;
+    if (!ids.length) {
+      notUploaded = {};
+      unstoredSince = {};
+      missingSince = {};
+      showStatus();
+      return;
+    }
     uploading = true;
-    // images not in the store yet (still being added) are picked up next time
-    readFiles(ids, function (files) {
-      var queue = Object.keys(files);
+    readFiles(ids, function (stored) {
+      var now = Date.now();
+      var files = {};
+      var toStore = {};
+      var wasUnstored = unstoredSince;
+      var wasMissing = missingSince;
+      notUploaded = {};
+      unstoredSince = {};
+      missingSince = {};
+      ids.forEach(function (id) {
+        var inTab = memFiles[id] && memFiles[id].dataURL ? memFiles[id] : null;
+        var file = stored[id] || inTab;
+        if (!file) {
+          missingSince[id] = wasMissing[id] || now;
+          return;
+        }
+        files[id] = file;
+        notUploaded[id] = 1;
+        if (!stored[id]) {
+          unstoredSince[id] = wasUnstored[id] || now;
+          if (now - unstoredSince[id] > STORE_GRACE_MS) toStore[id] = inTab;
+        }
+      });
+
+      // 1. The editor's save to this device failed (it doesn't retry). Retry.
+      if (Object.keys(toStore).length && now >= storeRetryAt) {
+        storeRetryAt = now + 15000;
+        storeFiles(
+          toStore,
+          function (err) {
+            localSaveFailed = !!err;
+            if (!err) {
+              Object.keys(toStore).forEach(function (id) {
+                delete unstoredSince[id];
+              });
+            }
+            showStatus();
+          },
+          true,
+        );
+      }
+
+      // 2. Upload, once the server's list is known.
+      var queue = onServer
+        ? Object.keys(files).filter(function (id) {
+            return !(retryAt[id] > now);
+          })
+        : [];
+      showStatus();
       var next = function () {
         var id = queue.shift();
         if (!id) {
           uploading = false;
+          showStatus();
           return;
         }
-        fetch(FILES_API + "/" + id, {
+        var failed = function (why) {
+          retryAt[id] = Date.now() + 30000;
+          console.error("[server-sync] image upload failed", id, why);
+        };
+        fetchWithin(180000, FILES_API + "/" + id, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ mimeType: files[id].mimeType, dataURL: files[id].dataURL }),
         })
           .then(function (res) {
-            if (res.ok) {
+            if (apiOk(res)) {
               onServer[id] = 1;
+              delete notUploaded[id];
+              delete unstoredSince[id];
+              delete retryAt[id];
+              if (!Object.keys(notUploaded).length) savedUntil = Date.now() + 3000;
             } else {
-              retryAt[id] = Date.now() + 60000;
-              console.error("[server-sync] image upload failed", id, res.status);
+              failed(res.redirected ? "redirected to " + res.url : res.status);
             }
           })
-          .catch(function (e) {
-            retryAt[id] = Date.now() + 60000;
-            console.error("[server-sync] image upload failed", id, e);
-          })
-          .then(next);
+          .catch(failed)
+          .then(function () {
+            // 3. Say how it's going.
+            showStatus();
+            next();
+          });
       };
       next();
     });
@@ -400,7 +586,7 @@
     pushing = true;
     fetch(API, { method: "PUT", headers: { "Content-Type": "application/json" }, body: buildPayload() })
       .then(function (res) {
-        if (res.ok) {
+        if (apiOk(res)) {
           setServerVersion(v);
         } else if (res.status === 409) {
           // another device saved something newer; take it
@@ -410,7 +596,7 @@
             syncFiles();
           });
         } else {
-          console.error("[server-sync] save failed", res.status);
+          console.error("[server-sync] save failed", res.redirected ? "redirected to " + res.url : res.status);
         }
       })
       .catch(function (e) {
@@ -427,7 +613,7 @@
     if (document.hidden || localVersion() > serverVersion) return;
     fetch(API, { cache: "no-store" })
       .then(function (res) {
-        return res.status === 200 ? res.json() : null;
+        return res.status === 200 && !res.redirected ? res.json() : null;
       })
       .then(function (scene) {
         if (scene && scene.savedAt > localVersion()) {
@@ -455,7 +641,7 @@
   }, 2000);
   setInterval(function () {
     pull();
-    if (waitingForServer && !document.hidden) syncFiles();
+    if ((waitingForServer || listFailed) && !document.hidden) syncFiles();
   }, 15000);
   document.addEventListener("visibilitychange", function () {
     if (document.hidden) return flush();
@@ -467,6 +653,12 @@
     retryDownloadsIfDue();
   });
   window.addEventListener("pagehide", flush);
+  // closing the tab now could lose the only copy of an image
+  window.addEventListener("beforeunload", function (event) {
+    if (!Object.keys(notUploaded).length) return;
+    event.preventDefault();
+    event.returnValue = "";
+  });
 
   // 4. "All boards" button and board name in the tab title.
   var addBackButton = function () {
@@ -482,6 +674,8 @@
       "border-radius:8px;font:500 13px/1.2 system-ui,sans-serif;white-space:nowrap;pointer-events:none;" +
       "background:#ececf4;color:#1b1b1f;box-shadow:0 0 0 1px #e0e0ea}" +
       "html.wb-dark #wb-status{background:#232329;color:#e3e3e8;box-shadow:0 0 0 1px #2e2d39}" +
+      "#wb-status.wb-warn{background:#fff4d6;color:#5c3d00;box-shadow:0 0 0 1px #f0c24b;white-space:normal;max-width:min(90vw,520px);text-align:center}" +
+      "html.wb-dark #wb-status.wb-warn{background:#3d2f0d;color:#ffe2a0;box-shadow:0 0 0 1px #7a5c14}" +
       "@media (max-width:730px){#wb-status{top:24px}}";
     document.head.appendChild(style);
     var a = document.createElement("a");

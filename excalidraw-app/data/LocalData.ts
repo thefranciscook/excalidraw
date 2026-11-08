@@ -50,6 +50,17 @@ const filesStore = createStore("files-db", "files-store");
 
 export const localStorageQuotaExceededAtom = atom(false);
 
+// On the self-hosted whiteboard, all boards share this image store, so
+// "not on the current canvas" doesn't mean unused. Only drop images the
+// server has a copy of (server-sync.js knows which); the rest may be the only
+// copy of an image on another board.
+const isBackedUpElsewhere = (id: string) => {
+  const serverHasFile = (
+    window as { wbServerHasFile?: (id: string) => boolean }
+  ).wbServerHasFile;
+  return typeof serverHasFile !== "function" || serverHasFile(id);
+};
+
 class LocalFileManager extends FileManager {
   clearObsoleteFiles = async (opts: { currentFileIds: FileId[] }) => {
     await entries(filesStore).then((entries) => {
@@ -61,7 +72,8 @@ class LocalFileManager extends FileManager {
         if (
           (!imageData.lastRetrieved ||
             Date.now() - imageData.lastRetrieved > 24 * 3600 * 1000) &&
-          !opts.currentFileIds.includes(id as FileId)
+          !opts.currentFileIds.includes(id as FileId) &&
+          isBackedUpElsewhere(id)
         ) {
           del(id, filesStore);
         }

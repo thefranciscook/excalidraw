@@ -138,8 +138,13 @@ const MIME_EXT = {
 const EXT_MIME = { svg: "image/svg+xml", png: "image/png", jpg: "image/jpeg", gif: "image/gif", webp: "image/webp", bmp: "image/bmp", ico: "image/x-icon", avif: "image/avif" };
 const INDEX_REFRESH_MS = 60 * 1000;
 
+// Time limit per GitHub request: uploads run one at a time, so a request that
+// never finishes would hold up every upload after it.
+const GITHUB_TIMEOUT_MS = 120 * 1000;
+
 const github = (apiPath, opts = {}) =>
   fetch(`${GITHUB_API}/repos/${GITHUB_REPO}${apiPath}`, {
+    signal: AbortSignal.timeout(GITHUB_TIMEOUT_MS),
     ...opts,
     headers: {
       Authorization: `Bearer ${GITHUB_TOKEN}`,
