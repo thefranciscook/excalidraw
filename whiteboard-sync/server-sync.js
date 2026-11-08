@@ -93,9 +93,9 @@
   // Put any missing ones into Excalidraw's image store (IndexedDB "files-db",
   // same layout as idb-keyval's createStore), then have it reload images.
   // Calls back with an error, or null once the files are stored.
-  var storeFiles = function (files, done) {
+  var storeFiles = function (files, done, quiet) {
     var finish = function (err, added) {
-      if (added) notifyExcalidraw();
+      if (added && !quiet) notifyExcalidraw();
       if (done) done(err);
     };
     var req = indexedDB.open("files-db");
@@ -237,13 +237,16 @@
   var waitingForServer = false;
   // the server's image list couldn't be fetched (retried every 15s)
   var listFailed = false;
-  // images on this board that are in this browser but not on the server yet
-  var notUploaded = {};
-  // images on this board that are neither here nor on the server, with the
-  // time each was first seen missing (a just-pasted image takes a moment to
-  // reach the image store)
-  var missingSince = {};
-  var MISSING_GRACE_MS = 10000;
+  // The order for every image added here: 1. save it on this device,
+  // 2. upload it, 3. say how that's going. Nothing waits on step 1: the
+  // editor hands over its images as they are added (wbOnFiles, from
+  // excalidraw-app App.tsx), so an image is uploaded even if saving it on
+  // this device fails, and saving it here is retried, which the editor
+  // doesn't do.
+  var memFiles = {};
+  window.wbOnFiles = function (files) {
+    memFiles = files || {};
+  };
 
   // Lets the app's clean-up of old images keep the ones the server doesn't
   // have: they may be the only copy (LocalData.ts, clearObsoleteFiles).
@@ -251,45 +254,84 @@
     return !!(onServer && onServer[id]);
   };
 
+  // Ask the browser not to clear this site's storage when space runs low.
+  try {
+    if (navigator.storage && navigator.storage.persist) navigator.storage.persist();
+  } catch (e) {}
+
+  // State of the board's images that the server doesn't have yet:
+  var notUploaded = {}; // here (on this device or in this tab), not uploaded
+  var unstoredSince = {}; // only in this tab, not saved on this device; since when
+  var missingSince = {}; // nowhere: not here, not on the server; since when
+  var localSaveFailed = false;
+  var savedUntil = 0; // show "saved" briefly after the last upload
+  // a just-added image takes a moment to reach this device's image store
+  var STORE_GRACE_MS = 5000;
+  var MISSING_GRACE_MS = 10000;
+
   var plural = function (n) {
     return n + (n === 1 ? " image" : " images");
+  };
+  var isAre = function (n) {
+    return n === 1 ? " isn't" : " aren't";
+  };
+  var since = function (map, ms) {
+    var now = Date.now();
+    return Object.keys(map).filter(function (id) {
+      return now - map[id] > ms;
+    }).length;
   };
 
   var statusEl = null;
   var showStatus = function () {
     if (!statusEl) return;
-    var text = "";
-    var warn = false;
     var now = Date.now();
-    var missing = Object.keys(missingSince).filter(function (id) {
-      return now - missingSince[id] > MISSING_GRACE_MS;
-    }).length;
     var unsent = Object.keys(notUploaded);
     var failedUploads = unsent.filter(function (id) {
       return retryAt[id] > now;
     }).length;
-    if (Object.keys(downloading).length) {
+    var onlyInTab = since(unstoredSince, STORE_GRACE_MS);
+    var missing = since(missingSince, MISSING_GRACE_MS);
+    var text = "";
+    var warn = true;
+    if (onlyInTab) {
+      text =
+        plural(onlyInTab) +
+        " couldn't be saved on this device" +
+        (localSaveFailed ? " (its storage may be full)" : "") +
+        " and" +
+        isAre(onlyInTab) +
+        " on the server yet. Don't close this tab.";
+    } else if (failedUploads) {
+      // (only claim they're saved here once that's known)
+      text =
+        plural(failedUploads) +
+        " couldn't be uploaded yet. Retrying…" +
+        (Object.keys(unstoredSince).length ? " Don't close this tab." : " They're saved on this device.");
+    } else if (listFailed && unsent.length) {
+      text = "Can't reach the server. " + plural(unsent.length) + " saved on this device only, for now. Retrying…";
+    } else if (Object.keys(downloading).length) {
       text = "Loading images " + batchDone + "/" + Object.keys(batch).length;
-    } else {
-      batch = {};
-      batchDone = 0;
-      var failed = Object.keys(downloadRetryAt).length;
-      if (failed) text = plural(failed) + " couldn't load. Retrying…";
-    }
-    if (!text && failedUploads) {
-      text = plural(failedUploads) + " couldn't be saved to the server. Retrying… Keep this tab open.";
-      warn = true;
-    } else if (!text && unsent.length) {
-      text = "Saving " + plural(unsent.length) + " to the server…";
-    } else if (!text && listFailed) {
-      text = "Can't reach image storage. Images added here aren't backed up yet. Retrying…";
-      warn = true;
-    }
-    if (!text && missing) {
+      warn = false;
+    } else if (Object.keys(downloadRetryAt).length) {
+      text = plural(Object.keys(downloadRetryAt).length) + " couldn't load. Retrying…";
+      warn = false;
+    } else if (unsent.length) {
+      text = "Uploading " + plural(unsent.length) + "…";
+      warn = false;
+    } else if (missing) {
       text =
         plural(missing) +
-        " never reached the server. Open this board on the device they were added on to upload them.";
-      warn = true;
+        " on this board never reached the server and" +
+        isAre(missing) +
+        " on this device. Open the board where they were added to upload them.";
+    } else if (savedUntil > now) {
+      text = "Images saved";
+      warn = false;
+    }
+    if (!Object.keys(downloading).length) {
+      batch = {};
+      batchDone = 0;
     }
     statusEl.textContent = text;
     statusEl.className = warn ? "wb-warn" : "";
@@ -399,34 +441,72 @@
       .then(showStatus);
   };
 
-  // Upload images on the board that the server doesn't have yet, one at a time.
+  // Every 2s: for the board's images the server doesn't have, make sure each
+  // is saved on this device, and upload them one at a time.
   var uploading = false;
+  var storeRetryAt = 0;
   var pushFiles = function () {
-    if (!onServer || uploading) return;
+    if (uploading) return;
     var ids = imageFileIds().filter(function (id) {
-      return !onServer[id];
+      return !(onServer && onServer[id]);
     });
     if (!ids.length) {
       notUploaded = {};
+      unstoredSince = {};
       missingSince = {};
       showStatus();
       return;
     }
     uploading = true;
-    // images not in the store yet (still being added) are picked up next time
-    readFiles(ids, function (files) {
+    readFiles(ids, function (stored) {
       var now = Date.now();
+      var files = {};
+      var toStore = {};
+      var wasUnstored = unstoredSince;
+      var wasMissing = missingSince;
       notUploaded = {};
-      var stillMissing = {};
+      unstoredSince = {};
+      missingSince = {};
       ids.forEach(function (id) {
-        if (files[id]) notUploaded[id] = 1;
-        else stillMissing[id] = missingSince[id] || now;
+        var inTab = memFiles[id] && memFiles[id].dataURL ? memFiles[id] : null;
+        var file = stored[id] || inTab;
+        if (!file) {
+          missingSince[id] = wasMissing[id] || now;
+          return;
+        }
+        files[id] = file;
+        notUploaded[id] = 1;
+        if (!stored[id]) {
+          unstoredSince[id] = wasUnstored[id] || now;
+          if (now - unstoredSince[id] > STORE_GRACE_MS) toStore[id] = inTab;
+        }
       });
-      missingSince = stillMissing;
+
+      // 1. The editor's save to this device failed (it doesn't retry). Retry.
+      if (Object.keys(toStore).length && now >= storeRetryAt) {
+        storeRetryAt = now + 15000;
+        storeFiles(
+          toStore,
+          function (err) {
+            localSaveFailed = !!err;
+            if (!err) {
+              Object.keys(toStore).forEach(function (id) {
+                delete unstoredSince[id];
+              });
+            }
+            showStatus();
+          },
+          true,
+        );
+      }
+
+      // 2. Upload, once the server's list is known.
+      var queue = onServer
+        ? Object.keys(files).filter(function (id) {
+            return !(retryAt[id] > now);
+          })
+        : [];
       showStatus();
-      var queue = Object.keys(files).filter(function (id) {
-        return !(retryAt[id] > now);
-      });
       var next = function () {
         var id = queue.shift();
         if (!id) {
@@ -447,13 +527,16 @@
             if (apiOk(res)) {
               onServer[id] = 1;
               delete notUploaded[id];
+              delete unstoredSince[id];
               delete retryAt[id];
+              if (!Object.keys(notUploaded).length) savedUntil = Date.now() + 3000;
             } else {
               failed(res.redirected ? "redirected to " + res.url : res.status);
             }
           })
           .catch(failed)
           .then(function () {
+            // 3. Say how it's going.
             showStatus();
             next();
           });
