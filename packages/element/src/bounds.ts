@@ -55,6 +55,8 @@ import { intersectElementWithLineSegment } from "./collision";
 import {
   elementOverlapsWithFrame,
   getContainingFrame,
+  getFrameAncestors,
+  hasFrameAncestorIn,
   isFrameClippable,
 } from "./frame";
 
@@ -1628,13 +1630,25 @@ export const elementsOverlappingBBox = <T extends ExcalidrawElement>({
 
     // Clip element bounds by its containing frame (if any), since only the
     // visible (frame-clipped) portion of the element is relevant for selection.
+    // Nested frames clip to each frame containing them.
     const associatedFrame = getContainingFrame(element, elementsMap);
     if (
       associatedFrame &&
       isFrameClippable(element, elementsMap) &&
       elementOverlapsWithFrame(element, associatedFrame, elementsMap)
     ) {
-      const frameAABB = getElementBounds(associatedFrame, elementsMap);
+      const frameAABB = getFrameAncestors(element, elementsMap).reduce(
+        (acc, frame) => {
+          const bounds = getElementBounds(frame, elementsMap);
+          return [
+            Math.max(acc[0], bounds[0]),
+            Math.max(acc[1], bounds[1]),
+            Math.min(acc[2], bounds[2]),
+            Math.min(acc[3], bounds[3]),
+          ] as Bounds;
+        },
+        getElementBounds(associatedFrame, elementsMap),
+      );
       elementAABB = [
         Math.max(elementAABB[0], frameAABB[0]),
         Math.max(elementAABB[1], frameAABB[1]),
@@ -1780,7 +1794,7 @@ export const elementsOverlappingBBox = <T extends ExcalidrawElement>({
 
   if (framesInSelection) {
     elementsInSelection.forEach((element) => {
-      if (element.frameId && framesInSelection.has(element.frameId)) {
+      if (hasFrameAncestorIn(element, framesInSelection, elementsMap)) {
         elementsInSelection.delete(element);
       }
     });

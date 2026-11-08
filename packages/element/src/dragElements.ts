@@ -23,6 +23,7 @@ import {
   updateBoundElements,
 } from "./binding";
 import { getCommonBounds } from "./bounds";
+import { getFrameSubtreeIds } from "./frame";
 import { getPerfectElementSize } from "./sizeHelpers";
 import { getBoundTextElement } from "./textElement";
 import { getMinTextElementWidth } from "./textMeasurements";
@@ -86,8 +87,13 @@ export const dragSelectedElements = (
     .map((f) => f.id);
 
   if (frames.length > 0) {
+    // everything inside them moves along, nested frames' contents included
+    const framesSubtreeIds = getFrameSubtreeIds(
+      scene.getNonDeletedElements(),
+      frames,
+    );
     for (const element of scene.getNonDeletedElements()) {
-      if (element.frameId !== null && frames.includes(element.frameId)) {
+      if (element.frameId !== null && framesSubtreeIds.has(element.frameId)) {
         elementsToUpdate.add(element);
       }
     }

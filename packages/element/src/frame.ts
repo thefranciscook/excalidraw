@@ -54,6 +54,284 @@ import type {
   NonDeletedExcalidrawElement,
 } from "./types";
 
+// --------------------------- Frame Hierarchy --------------------------------
+//
+// Frames nest: a frame-like element may itself have a `frameId` pointing to
+// its parent frame. The hierarchy is the `frameId` chain. Helpers below are
+// cycle-safe (a corrupted chain is cut where it loops).
+//
+// Z-order of a frame F's block (contiguous in the elements array):
+//
+//   [F's non-frame children…, child frame Q1's block, Q2's block, …, F]
+//
+// i.e. inside a frame, plain content is the bottom layer and child frames
+// (with everything in them) the top layer, so child frames are always shown
+// above their parent's content.
+
+/**
+ * Frame-likes containing the element, innermost (its parent) first.
+ */
+export const getFrameAncestors = (
+  element: ExcalidrawElement,
+  elementsMap: ElementsMap,
+): ExcalidrawFrameLikeElement[] => {
+  const ancestors: ExcalidrawFrameLikeElement[] = [];
+  const visited = new Set<string>([element.id]);
+  let frameId = element.frameId;
+  while (frameId && !visited.has(frameId)) {
+    visited.add(frameId);
+    const frame = elementsMap.get(frameId);
+    if (!frame || !isFrameLikeElement(frame)) {
+      break;
+    }
+    ancestors.push(frame);
+    frameId = frame.frameId;
+  }
+  return ancestors;
+};
+
+/** Whether the element is (transitively) inside the given frame. */
+export const isFrameDescendantOf = (
+  element: ExcalidrawElement,
+  frameId: ExcalidrawFrameLikeElement["id"],
+  elementsMap: ElementsMap,
+) => {
+  if (!element.frameId || element.id === frameId) {
+    return false;
+  }
+  if (element.frameId === frameId) {
+    return true;
+  }
+  return getFrameAncestors(element, elementsMap).some(
+    (frame) => frame.id === frameId,
+  );
+};
+
+/** The outermost frame containing the element (or the element itself). */
+export const getRootFrame = (
+  element: ExcalidrawElement,
+  elementsMap: ElementsMap,
+): ExcalidrawFrameLikeElement | null => {
+  const ancestors = getFrameAncestors(element, elementsMap);
+  return (
+    ancestors[ancestors.length - 1] ??
+    (isFrameLikeElement(element) ? element : null)
+  );
+};
+
+/**
+ * Ids of the given frames and of all frames nested in them, at any depth.
+ */
+export const getFrameSubtreeIds = (
+  allElements: ElementsMapOrArray,
+  frameIds: Iterable<ExcalidrawFrameLikeElement["id"]>,
+) => {
+  const childFramesByParent = new Map<string, string[]>();
+  for (const element of allElements.values()) {
+    if (isFrameLikeElement(element) && element.frameId) {
+      const children = childFramesByParent.get(element.frameId) || [];
+      children.push(element.id);
+      childFramesByParent.set(element.frameId, children);
+    }
+  }
+  const subtreeIds = new Set<string>();
+  const queue = Array.from(frameIds);
+  while (queue.length) {
+    const frameId = queue.pop()!;
+    if (subtreeIds.has(frameId)) {
+      continue;
+    }
+    subtreeIds.add(frameId);
+    queue.push(...(childFramesByParent.get(frameId) || []));
+  }
+  return subtreeIds;
+};
+
+/**
+ * All elements (transitively) inside the frame, nested frames included, in
+ * the order of `allElements`. Includes deleted elements, as
+ * `getFrameChildren()` does.
+ */
+export const getFrameDescendants = (
+  allElements: ElementsMapOrArray,
+  frameId: ExcalidrawFrameLikeElement["id"],
+) => {
+  const subtreeIds = getFrameSubtreeIds(allElements, [frameId]);
+  const descendants: ExcalidrawElement[] = [];
+  for (const element of allElements.values()) {
+    if (
+      element.frameId &&
+      element.id !== frameId &&
+      subtreeIds.has(element.frameId)
+    ) {
+      descendants.push(element);
+    }
+  }
+  return descendants;
+};
+
+/**
+ * Whether any of the element's ancestor frames is in the given set (a `Set`
+ * or an id → truthy record such as `appState.selectedElementIds`).
+ */
+export const hasFrameAncestorIn = (
+  element: ExcalidrawElement,
+  frameIds:
+    | ReadonlySet<string>
+    | ReadonlyMap<string, unknown>
+    | Readonly<Record<string, unknown>>,
+  elementsMap: ElementsMap,
+) => {
+  if (!element.frameId) {
+    return false;
+  }
+  const has =
+    typeof (frameIds as ReadonlySet<string>).has === "function"
+      ? (id: string) => (frameIds as ReadonlySet<string>).has(id)
+      : (id: string) => !!(frameIds as Readonly<Record<string, unknown>>)[id];
+  if (has(element.frameId)) {
+    return true;
+  }
+  return getFrameAncestors(element, elementsMap).some((frame) => has(frame.id));
+};
+
+/**
+ * Whether frame `a` is shown above frame `b`: a frame is above the frames
+ * containing it, and otherwise ordered as the blocks of the frames containing
+ * them that are siblings (a frame closes its block, so its index orders it).
+ *
+ * @param getIndex the frames' (and their ancestors') z-index
+ */
+export const isFrameAbove = (
+  a: ExcalidrawFrameLikeElement,
+  b: ExcalidrawFrameLikeElement,
+  elementsMap: ElementsMap,
+  getIndex: (element: ExcalidrawElement) => number,
+) => {
+  const chainA = [a, ...getFrameAncestors(a, elementsMap)];
+  const chainB = [b, ...getFrameAncestors(b, elementsMap)];
+  if (chainA.includes(b)) {
+    return true;
+  }
+  if (chainB.includes(a)) {
+    return false;
+  }
+  const idsB = new Set(chainB.map((frame) => frame.id));
+  // the frames under their closest common ancestor (or at the top level)
+  const commonIndexA = chainA.findIndex((frame) => idsB.has(frame.id));
+  const siblingA =
+    commonIndexA === -1 ? chainA[chainA.length - 1] : chainA[commonIndexA - 1];
+  const common = commonIndexA === -1 ? null : chainA[commonIndexA];
+  const commonIndexB = common
+    ? chainB.findIndex((frame) => frame.id === common.id)
+    : chainB.length;
+  const siblingB = chainB[commonIndexB - 1];
+  return getIndex(siblingA) > getIndex(siblingB);
+};
+
+/**
+ * Re-emits every frame tree that has nested frames in its normalized order
+ * (see top of this section), anchored at its root frame's position. Flat
+ * frames are left as they are. Returns the same array if nothing moves.
+ */
+export const normalizeNestedFrameOrder = <T extends ExcalidrawElement>(
+  elements: readonly T[],
+): readonly T[] => {
+  const elementsMap = arrayToMap(elements);
+
+  const childrenByFrame = new Map<string, T[]>();
+  let hasNesting = false;
+  for (const element of elements) {
+    if (!element.frameId) {
+      continue;
+    }
+    const frame = elementsMap.get(element.frameId);
+    if (!frame || !isFrameLikeElement(frame)) {
+      continue;
+    }
+    if (isFrameLikeElement(element)) {
+      hasNesting = true;
+    }
+    const children = childrenByFrame.get(element.frameId) || [];
+    children.push(element);
+    childrenByFrame.set(element.frameId, children);
+  }
+
+  if (!hasNesting) {
+    return elements;
+  }
+
+  const emitted = new Set<string>();
+  const emitBlock = (frame: T, out: T[]) => {
+    if (emitted.has(frame.id)) {
+      return;
+    }
+    emitted.add(frame.id);
+    const children = childrenByFrame.get(frame.id) || [];
+    for (const child of children) {
+      if (!isFrameLikeElement(child) && !emitted.has(child.id)) {
+        emitted.add(child.id);
+        out.push(child);
+      }
+    }
+    for (const child of children) {
+      if (isFrameLikeElement(child)) {
+        emitBlock(child, out);
+      }
+    }
+    out.push(frame);
+  };
+
+  const treesWithNesting = new Set<string>();
+  for (const element of elements) {
+    if (isFrameLikeElement(element) && element.frameId) {
+      const root = getRootFrame(element, elementsMap);
+      if (root) {
+        treesWithNesting.add(root.id);
+      }
+    }
+  }
+
+  const nextElements: T[] = [];
+  const isInNestedTree = (element: T) => {
+    const root = getRootFrame(element, elementsMap);
+    return !!root && treesWithNesting.has(root.id);
+  };
+
+  for (const element of elements) {
+    if (emitted.has(element.id)) {
+      continue;
+    }
+    if (treesWithNesting.has(element.id)) {
+      emitBlock(element, nextElements);
+    } else if (!isInNestedTree(element)) {
+      nextElements.push(element);
+    }
+    // else: emitted with its root frame
+  }
+
+  // elements of a tree whose frames chain is broken (shouldn't happen)
+  for (const element of elements) {
+    if (!emitted.has(element.id) && isInNestedTree(element)) {
+      nextElements.push(element);
+    }
+  }
+
+  if (nextElements.every((element, index) => element === elements[index])) {
+    return elements;
+  }
+
+  const movedElements = new Map<string, ExcalidrawElement>();
+  nextElements.forEach((element, index) => {
+    if (element !== elements[index]) {
+      movedElements.set(element.id, element);
+    }
+  });
+  syncMovedIndices(nextElements, movedElements);
+
+  return nextElements;
+};
+
 // --------------------------- Frame State ------------------------------------
 export const bindElementsToFramesAfterDuplication = (
   nextElements: readonly ExcalidrawElement[],
@@ -128,8 +406,12 @@ export const getElementsCompletelyInFrame = (
     }),
   ).filter(
     (element) =>
-      (!isFrameLikeElement(element) && !element.frameId) ||
-      element.frameId === frame.id,
+      element.id !== frame.id &&
+      // its siblings (at the frame's level), or already its children
+      ((element.frameId ?? null) === (frame.frameId ?? null) ||
+        element.frameId === frame.id) &&
+      // not a frame containing it (cycle)
+      !isFrameDescendantOf(frame, element.id, elementsMap),
   );
 
 export const isElementContainingFrame = (
@@ -303,9 +585,9 @@ export const getRootElements = <T extends ExcalidrawElement>(
   const frameElements = arrayToMap(getFrameLikeElements(allElements));
   return allElements.filter(
     (element) =>
-      frameElements.has(element.id) ||
       !element.frameId ||
-      !frameElements.has(element.frameId),
+      // in no frame of the set, at any depth
+      !hasFrameAncestorIn(element, frameElements, frameElements),
   );
 };
 
@@ -513,10 +795,14 @@ export const filterElementsEligibleAsFrameChildren = (
   const eligibleElements: ExcalidrawElement[] = [];
 
   for (const element of elements) {
-    // don't add frames or their children
+    // elements inside other frames of the set stay in them (the outermost of
+    // those frames is what's eligible), and neither the frame itself nor the
+    // frames containing it (cycle) are
     if (
-      isFrameLikeElement(element) ||
-      (element.frameId && otherFrames.has(element.frameId))
+      element.id === frame.id ||
+      hasFrameAncestorIn(element, otherFrames, elementsMap) ||
+      (isFrameLikeElement(element) &&
+        isFrameDescendantOf(frame, element.id, elementsMap))
     ) {
       continue;
     }
@@ -551,7 +837,7 @@ export const getCommonFrameId = (elements: readonly ExcalidrawElement[]) => {
   let commonFrameId: ExcalidrawElement["frameId"] | undefined;
 
   for (const element of elements) {
-    if (isFrameLikeElement(element) || !element.frameId) {
+    if (!element.frameId) {
       return null;
     }
 
@@ -565,16 +851,52 @@ export const getCommonFrameId = (elements: readonly ExcalidrawElement[]) => {
   return commonFrameId ?? null;
 };
 
+/**
+ * Where to insert new children into the frame's block (see the top of
+ * "Frame Hierarchy"): frames at the top of its child-frame layer (just below
+ * the frame), other elements at the top of its content layer (just below its
+ * lowest child frame's block). Falls back to just above the highest
+ * (non-deleted) child when the frame's order is denormalized.
+ */
 export const getFrameChildrenInsertionIndex = (
   elements: readonly ExcalidrawElement[],
   frameId: ExcalidrawFrameLikeElement["id"],
+  opts?: { asFrame?: boolean },
 ): number | null => {
+  const childFrameIds = new Set<string>();
+  for (const element of elements) {
+    if (isFrameLikeElement(element) && element.frameId === frameId) {
+      childFrameIds.add(element.id);
+    }
+  }
+
+  if (childFrameIds.size && !opts?.asFrame) {
+    const childFramesSubtreeIds = getFrameSubtreeIds(elements, childFrameIds);
+    const frameIndex = elements.findIndex((element) => element.id === frameId);
+    const lowestChildFrameBlockIndex = elements.findIndex(
+      (element) =>
+        childFrameIds.has(element.id) ||
+        (!!element.frameId && childFramesSubtreeIds.has(element.frameId)),
+    );
+    if (frameIndex !== -1 && lowestChildFrameBlockIndex !== -1) {
+      return Math.min(frameIndex, lowestChildFrameBlockIndex);
+    }
+  }
+
+  const subtreeIds = opts?.asFrame
+    ? getFrameSubtreeIds(elements, [frameId])
+    : new Set([frameId]);
+
   for (let index = elements.length - 1; index >= 0; index--) {
     const element = elements[index];
 
     if (element.id === frameId) {
       return index;
-    } else if (element.frameId === frameId && !element.isDeleted) {
+    } else if (
+      element.frameId &&
+      subtreeIds.has(element.frameId) &&
+      !element.isDeleted
+    ) {
       // deleted children keep their frameId (and index), but don't count:
       // they'd place the new ones as high as they were
       return index + 1;
@@ -585,8 +907,74 @@ export const getFrameChildrenInsertionIndex = (
 };
 
 /**
+ * Reorders `elementsToMove` (already children of `frame`) into the frame's
+ * block: frames, with everything inside them, into its child-frame layer,
+ * other elements into its content layer. Pure, returns a new array.
+ */
+export const getElementsReorderedIntoFrame = <T extends ExcalidrawElement>(
+  allElements: readonly T[],
+  elementsToMove: ReadonlySetLike<ExcalidrawElement>,
+  frame: ExcalidrawFrameLikeElement,
+): T[] | null => {
+  const toMove = new Set(
+    Array.from(elementsToMove, (element) => element.id as string),
+  );
+  const movedFrameIds = new Set<string>();
+  for (const element of elementsToMove) {
+    if (isFrameLikeElement(element)) {
+      movedFrameIds.add(element.id);
+    }
+  }
+  const movedSubtreeIds = getFrameSubtreeIds(allElements, movedFrameIds);
+  const isInMovedFrame = (element: ExcalidrawElement) =>
+    !!element.frameId && movedSubtreeIds.has(element.frameId);
+
+  const content: T[] = [];
+  const frameBlocks: T[] = [];
+  const otherElements: T[] = [];
+  for (const element of allElements) {
+    if (movedSubtreeIds.has(element.id) || isInMovedFrame(element)) {
+      frameBlocks.push(element);
+    } else if (toMove.has(element.id)) {
+      content.push(element);
+    } else {
+      otherElements.push(element);
+    }
+  }
+
+  let nextElements = otherElements;
+  if (content.length) {
+    const index = getFrameChildrenInsertionIndex(nextElements, frame.id);
+    if (index === null) {
+      return null;
+    }
+    nextElements = [
+      ...nextElements.slice(0, index),
+      ...content,
+      ...nextElements.slice(index),
+    ];
+  }
+  if (frameBlocks.length) {
+    const index = getFrameChildrenInsertionIndex(nextElements, frame.id, {
+      asFrame: true,
+    });
+    if (index === null) {
+      return null;
+    }
+    nextElements = [
+      ...nextElements.slice(0, index),
+      ...frameBlocks,
+      ...nextElements.slice(index),
+    ];
+  }
+  return nextElements;
+};
+
+/**
  * Adds elements and their bound elements to frame. Reorders added elements to
  * be just below frame, or just above its highest child (whichever is higher).
+ * Frames are added with everything inside them, into the frame's child-frame
+ * layer (above its other children).
  *
  * @returns mutated allElements (same data structure)
  */
@@ -615,10 +1003,13 @@ export const addElementsToFrame = <T extends ElementsMapOrArray>(
     allElements,
     elementsToAdd,
   )) {
-    // don't add frames or their children
     if (
-      isFrameLikeElement(element) ||
-      (element.frameId && otherFrames.has(element.frameId))
+      element.id === frame.id ||
+      // frames containing the frame (cycle)
+      (isFrameLikeElement(element) &&
+        isFrameDescendantOf(frame, element.id, elementsMap)) ||
+      // elements inside frames being added stay in them
+      hasFrameAncestorIn(element, otherFrames, elementsMap)
     ) {
       continue;
     }
@@ -656,25 +1047,25 @@ export const addElementsToFrame = <T extends ElementsMapOrArray>(
     return allElements;
   }
 
-  const otherElements = Array.from(allElements.values()).filter(
-    (element) => !finalElementsToAdd.has(element),
-  );
-  const insertionIndex = getFrameChildrenInsertionIndex(
-    otherElements,
-    frame.id,
+  const reorderedElements = getElementsReorderedIntoFrame(
+    Array.from(allElements.values()),
+    finalElementsToAdd,
+    frame,
   );
 
-  if (insertionIndex === null) {
+  if (!reorderedElements) {
     return allElements;
   }
 
-  const reorderedElements = [
-    ...otherElements.slice(0, insertionIndex),
-    ...finalElementsToAdd,
-    ...otherElements.slice(insertionIndex),
-  ];
-
-  syncMovedIndices(reorderedElements, arrayToMap([...finalElementsToAdd]));
+  syncMovedIndices(
+    reorderedElements,
+    arrayToMap([
+      ...finalElementsToAdd,
+      ...getFrameDescendants(reorderedElements, frame.id).filter((element) =>
+        hasFrameAncestorIn(element, otherFrames, elementsMap),
+      ),
+    ]),
+  );
 
   return (
     Array.isArray(allElements)
@@ -686,6 +1077,14 @@ export const addElementsToFrame = <T extends ElementsMapOrArray>(
 export const removeElementsFromFrame = (
   elementsToRemove: ReadonlySetLike<ExcalidrawElement>,
   elementsMap: ElementsMap,
+  opts?: {
+    /**
+     * Move each element to the closest frame containing its frame that it
+     * still overlaps (instead of out of all frames). Callers should then
+     * `normalizeNestedFrameOrder()`.
+     */
+    reparent?: boolean;
+  },
 ) => {
   const _elementsToRemove = new Map<
     ExcalidrawElement["id"],
@@ -715,8 +1114,22 @@ export const removeElementsFromFrame = (
   }
 
   for (const [, element] of _elementsToRemove) {
+    let nextFrameId: ExcalidrawFrameLikeElement["id"] | null = null;
+    if (opts?.reparent) {
+      const container = isTextElement(element)
+        ? getContainerElement(element, elementsMap)
+        : null;
+      const target = container || element;
+      const frame = target.frameId ? elementsMap.get(target.frameId) : null;
+      nextFrameId =
+        (frame &&
+          getFrameAncestors(frame, elementsMap).find((ancestor) =>
+            elementOverlapsWithFrame(target, ancestor, elementsMap),
+          )?.id) ??
+        null;
+    }
     mutateElement(element, elementsMap, {
-      frameId: null,
+      frameId: nextFrameId,
     });
   }
 };
@@ -733,7 +1146,11 @@ export const isArrowEndInFrame = (
   const [x1, y1, x2, y2] = getElementAbsoluteCoords(frame, elementsMap);
   return [arrow.startBinding, arrow.endBinding].some((binding, index) =>
     binding
-      ? elementsMap.get(binding.elementId)?.frameId === frame.id
+      ? isFrameDescendantOf(
+          elementsMap.get(binding.elementId) ?? arrow,
+          frame.id,
+          elementsMap,
+        )
       : isPointWithinBounds(
           pointFrom(x1, y1),
           LinearElementEditor.getPointAtIndexGlobalCoordinates(
@@ -788,10 +1205,11 @@ export const removeArrowsWithoutEndInFrame = (
 export const removeAllElementsFromFrame = <T extends ExcalidrawElement>(
   allElements: readonly T[],
   frame: ExcalidrawFrameLikeElement,
+  opts?: { reparent?: boolean },
 ) => {
   const elementsInFrame = getFrameChildren(allElements, frame.id);
-  removeElementsFromFrame(elementsInFrame, arrayToMap(allElements));
-  return allElements;
+  removeElementsFromFrame(elementsInFrame, arrayToMap(allElements), opts);
+  return opts?.reparent ? normalizeNestedFrameOrder(allElements) : allElements;
 };
 
 export const replaceAllElementsInFrame = <T extends ExcalidrawElement>(
@@ -799,10 +1217,43 @@ export const replaceAllElementsInFrame = <T extends ExcalidrawElement>(
   nextElementsInFrame: ExcalidrawElement[],
   frame: ExcalidrawFrameLikeElement,
 ): T[] => {
-  const nextElements = addElementsToFrame(
-    removeAllElementsFromFrame(allElements, frame),
-    nextElementsInFrame,
-    frame,
+  const elementsMap = arrayToMap(allElements);
+  const isNested = getFrameChildren(allElements, frame.id).some(
+    isFrameLikeElement,
+  );
+  const hasNesting =
+    isNested ||
+    !!frame.frameId ||
+    nextElementsInFrame.some((element) => isFrameLikeElement(element));
+
+  if (!hasNesting) {
+    const nextElements = addElementsToFrame(
+      removeAllElementsFromFrame(allElements, frame),
+      nextElementsInFrame,
+      frame,
+    ).slice();
+    removeArrowsWithoutEndInFrame(
+      nextElementsInFrame,
+      arrayToMap(nextElements),
+    );
+    return nextElements;
+  }
+
+  // nested: children leaving the frame go to the frame containing it (if
+  // still in it), and those staying keep their place
+  const nextChildren = new Set(nextElementsInFrame);
+  const leaving = getFrameChildren(allElements, frame.id).filter(
+    (element) =>
+      !nextChildren.has(element) &&
+      !(
+        isTextElement(element) &&
+        element.containerId &&
+        nextChildren.has(elementsMap.get(element.containerId)!)
+      ),
+  );
+  removeElementsFromFrame(leaving, elementsMap, { reparent: true });
+  const nextElements = normalizeNestedFrameOrder(
+    addElementsToFrame(allElements, nextElementsInFrame, frame),
   ).slice();
   removeArrowsWithoutEndInFrame(nextElementsInFrame, arrayToMap(nextElements));
   return nextElements;
@@ -840,11 +1291,7 @@ export const updateFrameMembershipOfSelectedElements = <
   const elementsMap = arrayToMap(allElements);
 
   elementsToFilter.forEach((element) => {
-    if (
-      element.frameId &&
-      !isFrameLikeElement(element) &&
-      !isElementInFrame(element, elementsMap, appState)
-    ) {
+    if (element.frameId && !isElementInFrame(element, elementsMap, appState)) {
       elementsToRemove.add(element);
     }
   });
@@ -911,12 +1358,12 @@ export const getTargetFrame = (
     ? getContainerElement(element, elementsMap) || element
     : element;
 
-  // if the element and its containing frame are both selected, then
-  // the containing frame is the target frame
+  // if the element and a frame containing it are both selected (it moves
+  // with that frame), then its containing frame is the target frame
   if (
     _element.frameId &&
     appState.selectedElementIds[_element.id] &&
-    appState.selectedElementIds[_element.frameId]
+    hasFrameAncestorIn(_element, appState.selectedElementIds, elementsMap)
   ) {
     return getContainingFrame(_element, elementsMap);
   }
@@ -964,7 +1411,12 @@ export const isElementInFrame = (
     !appState.selectedElementsAreBeingDragged ||
     // if both frame and element are selected, won't update membership, so return true
     (appState.selectedElementIds[_element.id] &&
-      appState.selectedElementIds[frame.id])
+      (appState.selectedElementIds[frame.id] ||
+        hasFrameAncestorIn(
+          _element,
+          appState.selectedElementIds,
+          allElementsMap,
+        )))
   ) {
     return true;
   }
@@ -1121,8 +1573,9 @@ export const getElementsOverlappingFrame = <T extends ExcalidrawElement>(
     return (
       // exclude elements which are overlapping, but are in a different frame,
       // and thus invisible in target frame (unless not clipped by theirs)
+      // (nested frames' contents included)
       (!target.frameId ||
-        target.frameId === frame.id ||
+        isFrameDescendantOf(target, frame.id, elementsMap) ||
         !isFrameClippable(target, elementsMap)) &&
       doBoundsIntersect(getElementBounds(target, elementsMap), frameBounds)
     );
@@ -1136,8 +1589,8 @@ export const frameAndChildrenSelectedTogether = (
 
   return (
     selectedElements.length > 1 &&
-    selectedElements.some(
-      (element) => element.frameId && selectedElementsMap.has(element.frameId),
+    selectedElements.some((element) =>
+      hasFrameAncestorIn(element, selectedElementsMap, selectedElementsMap),
     )
   );
 };

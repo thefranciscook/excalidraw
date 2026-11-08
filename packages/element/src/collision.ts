@@ -63,6 +63,8 @@ import {
 
 import { distanceToElement } from "./distance";
 
+import { getFrameAncestors, isFrameDescendantOf } from "./frame";
+
 import { maxBindingDistance_simple } from "./binding";
 
 import { hasBackground } from "./comparisons";
@@ -295,12 +297,9 @@ const isPointClippedByEnclosingFrame = (
     return false;
   }
 
-  const enclosingFrame = elementsMap.get(element.frameId);
-
-  return (
-    !!enclosingFrame &&
-    isFrameLikeElement(enclosingFrame) &&
-    !pointInsideBounds(point, getElementBounds(enclosingFrame, elementsMap))
+  // nested frames are clipped to every frame containing them
+  return getFrameAncestors(element, elementsMap).some(
+    (frame) => !pointInsideBounds(point, getElementBounds(frame, elementsMap)),
   );
 };
 
@@ -387,8 +386,9 @@ const getBindingCandidates = (
 ): BindingCandidate[] => {
   const maxDistance = maxBindingDistance_simple(zoom);
   const candidates: BindingCandidate[] = [];
-  // A frame's children sit just below it in z-order, so a frame's background
-  // can't end the search: it only hides the non-children behind it
+  // A frame's children (at any depth) sit just below it in z-order, so a
+  // frame's background can't end the search: it only hides the non-children
+  // behind it
   let occludingFrameId: ExcalidrawElement["id"] | null = null;
   // We need to do hit testing from front (end of the array) to back (beginning of the array)
   // because array is ordered from lower z-index to highest and we want element z-index
@@ -401,7 +401,10 @@ const getBindingCandidates = (
       "Elements passed to binding hit tests should not contain deleted elements",
     );
 
-    if (occludingFrameId && element.frameId !== occludingFrameId) {
+    if (
+      occludingFrameId &&
+      !isFrameDescendantOf(element, occludingFrameId, elementsMap)
+    ) {
       continue;
     }
 

@@ -509,7 +509,7 @@ describe("wrap (w)", () => {
       expect(h.state.selectedLinearElement).toBe(null);
     });
 
-    it("leaves several frames be", () => {
+    it("nests several frames in a new frame", () => {
       const frames = [0, 600].map((x, index) =>
         API.createElement({ type: "frame", id: `frame${index}`, x }),
       );
@@ -518,9 +518,20 @@ describe("wrap (w)", () => {
 
       pressW();
 
-      expect(h.elements.filter((element) => !element.isDeleted)).toEqual(
-        frames,
-      );
+      const parent = h.elements.find(
+        (element) =>
+          element.type === "frame" &&
+          !frames.some((frame) => frame.id === element.id),
+      )!;
+      expect(parent).toBeDefined();
+      expect(getElement("frame0").frameId).toBe(parent.id);
+      expect(getElement("frame1").frameId).toBe(parent.id);
+      // the nested frames are below their parent in its block
+      expect(h.elements.map((element) => element.id)).toEqual([
+        "frame0",
+        "frame1",
+        parent.id,
+      ]);
     });
 
     it("wraps shapes with padding, and an image edge to edge", () => {

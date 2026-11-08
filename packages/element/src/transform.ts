@@ -67,6 +67,7 @@ import {
 } from "./typeChecks";
 
 import { syncInvalidIndices } from "./fractionalIndex";
+import { normalizeNestedFrameOrder } from "./frame";
 
 import {
   DEFAULT_BOUND_TEXT_LABEL_POSITION,
@@ -1146,7 +1147,36 @@ export const convertToExcalidrawElements = (
   // Once all the excalidraw elements are created, we can add frames since we
   // need to calculate coordinates and dimensions of frame which is possible after all
   // frame children are processed.
-  for (const [id, element] of elementsWithIds) {
+  // frames can be children of frames (nested): those are sized first, so that
+  // the frames containing them are sized around them
+  const frameEntries = Array.from(elementsWithIds).filter(
+    ([, element]) => element.type === "frame" || element.type === "magicframe",
+  );
+  const parentFrameIds = new Map<string, string>();
+  for (const [id, element] of frameEntries) {
+    if (element.type === "frame" || element.type === "magicframe") {
+      for (const childId of element.children) {
+        const newChildId = oldToNewElementIdMap.get(childId);
+        if (newChildId) {
+          parentFrameIds.set(newChildId, id);
+        }
+      }
+    }
+  }
+  const getFrameDepth = (id: string) => {
+    const visited = new Set<string>();
+    let depth = 0;
+    let parentId = parentFrameIds.get(id);
+    while (parentId && !visited.has(parentId)) {
+      visited.add(parentId);
+      depth++;
+      parentId = parentFrameIds.get(parentId);
+    }
+    return depth;
+  };
+  frameEntries.sort(([a], [b]) => getFrameDepth(b) - getFrameDepth(a));
+
+  for (const [id, element] of frameEntries) {
     if (element.type !== "frame" && element.type !== "magicframe") {
       continue;
     }
@@ -1216,5 +1246,6 @@ export const convertToExcalidrawElements = (
     }
   }
 
-  return elementStore.getElements();
+  // nested frames above their parents' other children
+  return normalizeNestedFrameOrder(elementStore.getElements());
 };

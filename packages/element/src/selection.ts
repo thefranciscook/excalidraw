@@ -1,4 +1,4 @@
-import { isShallowEqual, type Bounds } from "@excalidraw/common";
+import { arrayToMap, isShallowEqual, type Bounds } from "@excalidraw/common";
 
 import type {
   AppState,
@@ -13,7 +13,7 @@ import {
   isFrameLikeElement,
   isTextElement,
 } from "./typeChecks";
-import { getFrameChildren } from "./frame";
+import { getFrameDescendants, hasFrameAncestorIn } from "./frame";
 
 import { isNonDeletedElement } from ".";
 
@@ -32,9 +32,11 @@ export const shouldIgnoreElementFromSelection = (element: ExcalidrawElement) =>
 const excludeElementsFromFrames = <T extends ExcalidrawElement>(
   selectedElements: readonly T[],
   framesInSelection: Set<ExcalidrawFrameLikeElement["id"]>,
+  elementsMap: ElementsMap = arrayToMap(selectedElements),
 ) => {
   return selectedElements.filter((element) => {
-    if (element.frameId && framesInSelection.has(element.frameId)) {
+    // inside a selected frame, at any depth
+    if (hasFrameAncestorIn(element, framesInSelection, elementsMap)) {
       return false;
     }
     return true;
@@ -51,6 +53,8 @@ export const excludeElementsInFramesFromSelection = <
   T extends ExcalidrawElement,
 >(
   selectedElements: readonly T[],
+  /** to resolve frames containing the elements; defaults to the selection */
+  elementsMap?: ElementsMap,
 ) => {
   const framesInSelection = new Set<T["id"]>();
 
@@ -60,7 +64,11 @@ export const excludeElementsInFramesFromSelection = <
     }
   });
 
-  return excludeElementsFromFrames(selectedElements, framesInSelection);
+  return excludeElementsFromFrames(
+    selectedElements,
+    framesInSelection,
+    elementsMap,
+  );
 };
 
 export const getElementsWithinSelection = <T extends ExcalidrawElement>(
@@ -191,15 +199,21 @@ export const getSelectedElements = (
 
   if (opts?.includeElementsInFrames) {
     const elementsToInclude: NonDeletedExcalidrawElement[] = [];
+    const includedElements = new Set<string>();
     selectedElements.forEach((element) => {
       if (isFrameLikeElement(element)) {
-        getFrameChildren(elements, element.id).forEach(
-          (e) =>
-            !addedElements.has(e.id) &&
-            elementsToInclude.push(e as NonDeletedExcalidrawElement),
-        );
+        // everything inside it, nested frames included
+        getFrameDescendants(elements, element.id).forEach((e) => {
+          if (!addedElements.has(e.id) && !includedElements.has(e.id)) {
+            includedElements.add(e.id);
+            elementsToInclude.push(e as NonDeletedExcalidrawElement);
+          }
+        });
       }
-      elementsToInclude.push(element);
+      if (!includedElements.has(element.id)) {
+        includedElements.add(element.id);
+        elementsToInclude.push(element);
+      }
     });
 
     return elementsToInclude;

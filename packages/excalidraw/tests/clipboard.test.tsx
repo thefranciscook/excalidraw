@@ -700,7 +700,7 @@ describe("pasting & frames", () => {
     });
   });
 
-  it("should not filter out other frames and their children", async () => {
+  it("should nest pasted frames, with their children, in the frame", async () => {
     const frame = API.createElement({
       type: "frame",
       width: 100,
@@ -742,15 +742,16 @@ describe("pasting & frames", () => {
 
     pasteWithCtrlCmdV(clipboardJSON);
 
+    // [frame's content, nested frame's block, frame]
     await waitFor(() => {
       expect(h.elements.length).toBe(4);
       expect(h.elements[0].type).toBe(rect.type);
       expect(h.elements[0].frameId).toBe(frame.id);
-      expect(h.elements[1].id).toBe(frame.id);
-      expect(h.elements[2].type).toBe(rect2.type);
-      expect(h.elements[2].frameId).toBe(h.elements[3].id);
-      expect(h.elements[3].type).toBe(frame2.type);
-      expect(h.elements[3].frameId).toBe(null);
+      expect(h.elements[1].type).toBe(rect2.type);
+      expect(h.elements[1].frameId).toBe(h.elements[2].id);
+      expect(h.elements[2].type).toBe(frame2.type);
+      expect(h.elements[2].frameId).toBe(frame.id);
+      expect(h.elements[3].id).toBe(frame.id);
     });
   });
 });

@@ -10,9 +10,16 @@ import { getElementsInGroup } from "./groups";
 import { syncMovedIndices } from "./fractionalIndex";
 import { getSelectedElements } from "./selection";
 import { getBoundTextElement, getContainerElement } from "./textElement";
+import {
+  getFrameAncestors,
+  getRootFrame,
+  isFrameDescendantOf,
+  normalizeNestedFrameOrder,
+} from "./frame";
 
 import type { Scene } from "./Scene";
 import type {
+  ElementsMap,
   ExcalidrawArrowElement,
   ExcalidrawElement,
   ExcalidrawFrameLikeElement,
@@ -21,8 +28,17 @@ import type {
   OrderedExcalidrawElement,
 } from "./types";
 
-const isOfTargetFrame = (element: ExcalidrawElement, frameId: string) => {
-  return element.frameId === frameId || element.id === frameId;
+/** the frame, or (transitively) inside it */
+const isOfTargetFrame = (
+  element: ExcalidrawElement,
+  frameId: string,
+  elementsMap: ElementsMap,
+) => {
+  return (
+    element.frameId === frameId ||
+    element.id === frameId ||
+    isFrameDescendantOf(element, frameId, elementsMap)
+  );
 };
 
 /**
@@ -126,14 +142,16 @@ const getTargetIndexAccountingForBinding = (
   }
 };
 
+/** the frame's block: it and everything in it (nested frames included) */
 const getContiguousFrameRangeElements = (
   allElements: readonly ExcalidrawElement[],
   frameId: ExcalidrawFrameLikeElement["id"],
 ) => {
+  const elementsMap = arrayToMap(allElements);
   let rangeStart = -1;
   let rangeEnd = -1;
   allElements.forEach((element, index) => {
-    if (isOfTargetFrame(element, frameId)) {
+    if (isOfTargetFrame(element, frameId, elementsMap)) {
       if (rangeStart === -1) {
         rangeStart = index;
       }
@@ -201,6 +219,8 @@ const getTargetIndex = (
    */
   containingFrame: ExcalidrawFrameLikeElement["id"] | null,
   scene: Scene,
+  /** whether a (nested) frame is moved, within `containingFrame` */
+  isMovingFrame = false,
 ) => {
   const sourceElement = elements[boundaryIndex];
 
@@ -253,13 +273,34 @@ const getTargetIndex = (
     }
   }
 
+  if (containingFrame && isFrameLikeElement(nextElement)) {
+    // a nested frame: moved over as a whole, and only by other nested frames
+    // (child frames stay above their parent's other children)
+    if (!isMovingFrame) {
+      return -1;
+    }
+    const frameElements = getContiguousFrameRangeElements(
+      elements,
+      nextElement.id,
+    );
+    return direction === "left"
+      ? elements.indexOf(frameElements[0])
+      : elements.indexOf(frameElements[frameElements.length - 1]);
+  }
+
+  if (containingFrame && isMovingFrame) {
+    // a nested frame doesn't go below its parent's other children
+    return -1;
+  }
+
   if (
     !containingFrame &&
     (nextElement.frameId || isFrameLikeElement(nextElement))
   ) {
+    const rootFrame = getRootFrame(nextElement, arrayToMap(elements));
     const frameElements = getContiguousFrameRangeElements(
       elements,
-      nextElement.frameId || nextElement.id,
+      rootFrame?.id ?? nextElement.frameId ?? nextElement.id,
     );
     return direction === "left"
       ? elements.indexOf(frameElements[0])
@@ -363,18 +404,27 @@ const shiftElementsByOne = (
       .filter((idx) => isFrameLikeElement(elements[idx]))
       .map((idx) => elements[idx].id),
   );
+  const elementsMap = arrayToMap(elements);
 
   groupedIndices.forEach((indices, i) => {
     const leadingIndex = indices[0];
     const trailingIndex = indices[indices.length - 1];
     const boundaryIndex = direction === "left" ? leadingIndex : trailingIndex;
 
-    const containingFrame = indices.some((idx) => {
-      const el = elements[idx];
-      return el.frameId && selectedFrames.has(el.frameId);
-    })
-      ? null
-      : elements[boundaryIndex]?.frameId;
+    // each element moves with the outermost selected frame containing it (if
+    // any): the moved unit is in the frame that one is in
+    const unitRoots = indices.map(
+      (idx) =>
+        getFrameAncestors(elements[idx], elementsMap)
+          .filter((frame) => selectedFrames.has(frame.id))
+          .at(-1) ?? elements[idx],
+    );
+    const boundaryRoot =
+      direction === "left" ? unitRoots[0] : unitRoots[unitRoots.length - 1];
+    const containingFrame = boundaryRoot?.frameId ?? null;
+    const isMovingFrame =
+      !!containingFrame &&
+      unitRoots.some((element) => isFrameLikeElement(element));
 
     const targetIndex = getTargetIndex(
       appState,
@@ -383,6 +433,7 @@ const shiftElementsByOne = (
       direction,
       containingFrame,
       scene,
+      isMovingFrame,
     );
 
     if (targetIndex === -1 || boundaryIndex === targetIndex) {
@@ -425,7 +476,7 @@ const shiftElementsByOne = (
 
   syncMovedIndices(elements, targetElementsMap);
 
-  return elements;
+  return normalizeNestedFrameOrder(elements);
 };
 
 const shiftElementsToEnd = (
@@ -450,10 +501,11 @@ const shiftElementsToEnd = (
 
   let leadingIndex: number | undefined;
   let trailingIndex: number | undefined;
+  const elementsMap = arrayToMap(elements);
   if (direction === "left") {
     if (containingFrame) {
       leadingIndex = findIndex(elements, (el) =>
-        isOfTargetFrame(el, containingFrame),
+        isOfTargetFrame(el, containingFrame, elementsMap),
       );
     } else if (appState.editingGroupId) {
       const groupElements = getElementsInGroup(
@@ -472,7 +524,7 @@ const shiftElementsToEnd = (
   } else {
     if (containingFrame) {
       trailingIndex = findLastIndex(elements, (el) =>
-        isOfTargetFrame(el, containingFrame),
+        isOfTargetFrame(el, containingFrame, elementsMap),
       );
     } else if (appState.editingGroupId) {
       const groupElements = getElementsInGroup(
@@ -572,23 +624,28 @@ function shiftElementsAccountingForFrames(
     }
   }
 
+  const allElementsMap = arrayToMap(allElements);
+
   for (const element of allElements) {
     if (elementsToMove.has(element.id)) {
-      if (
-        isFrameLikeElement(element) ||
-        (element.frameId && fullySelectedFrames.has(element.frameId))
-      ) {
-        frameAwareContiguousElementsToMove.regularElements.push(element);
-      } else if (!element.frameId) {
+      // moved with the outermost selected frame containing it (if any), within
+      // the frame that one is in
+      const unitRoot =
+        getFrameAncestors(element, allElementsMap)
+          .filter((frame) => fullySelectedFrames.has(frame.id))
+          .at(-1) ?? element;
+      const containingFrameId = unitRoot.frameId;
+
+      if (!containingFrameId) {
         frameAwareContiguousElementsToMove.regularElements.push(element);
       } else {
         const frameChildren =
           frameAwareContiguousElementsToMove.frameChildren.get(
-            element.frameId,
+            containingFrameId,
           ) || [];
         frameChildren.push(element);
         frameAwareContiguousElementsToMove.frameChildren.set(
-          element.frameId,
+          containingFrameId,
           frameChildren,
         );
       }
@@ -611,12 +668,14 @@ function shiftElementsAccountingForFrames(
     );
   }
 
-  return shiftFunction(
-    nextElements,
-    appState,
-    direction,
-    null,
-    frameAwareContiguousElementsToMove.regularElements,
+  return normalizeNestedFrameOrder(
+    shiftFunction(
+      nextElements,
+      appState,
+      direction,
+      null,
+      frameAwareContiguousElementsToMove.regularElements,
+    ),
   );
 }
 

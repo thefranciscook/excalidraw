@@ -21,7 +21,8 @@ import {
 
 import {
   bindElementsToFramesAfterDuplication,
-  getFrameChildren,
+  getFrameDescendants,
+  hasFrameAncestorIn,
 } from "./frame";
 
 import { normalizeElementOrder } from "./sortElements";
@@ -336,7 +337,7 @@ export const duplicateElements = (
       const groupElements = getElementsInGroup(elements, groupId).flatMap(
         (element) =>
           isFrameLikeElement(element) && !preserveFrameChildrenOrder
-            ? [...getFrameChildren(elements, element.id), element]
+            ? [...getFrameDescendants(elements, element.id), element]
             : [element],
       );
 
@@ -351,10 +352,11 @@ export const duplicateElements = (
     // frame duplication
     // -------------------------------------------------------------------------
 
+    // (duplicated with the frame containing it, at any depth)
     if (
       !preserveFrameChildrenOrder &&
       element.frameId &&
-      frameIdsToDuplicate.has(element.frameId)
+      hasFrameAncestorIn(element, frameIdsToDuplicate, elementsMap)
     ) {
       continue;
     }
@@ -370,10 +372,12 @@ export const duplicateElements = (
         continue;
       }
 
-      const frameChildren = getFrameChildren(elements, frameId);
+      // everything in it, nested frames included
+      const frameChildren = getFrameDescendants(elements, frameId);
+      const frameChildrenIds = new Set(frameChildren.map((el) => el.id));
 
       const targetIndex = findLastIndex(elementsWithDuplicates, (el) => {
-        return el.frameId === frameId || el.id === frameId;
+        return frameChildrenIds.has(el.id) || el.id === frameId;
       });
 
       insertBeforeOrAfterIndex(

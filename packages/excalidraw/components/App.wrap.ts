@@ -7,7 +7,6 @@ import {
   hasBoundTextElement,
   isArrowElement,
   isBoundToContainer,
-  isFrameLikeElement,
   isTextBindableContainer,
   isTextElement,
   normalizeStickyNoteFontSize,
@@ -173,10 +172,8 @@ export class AppWrap {
       return unwrapFrame(elements, appState, frameToUnwrap, this.app);
     }
 
-    if (
-      selectedElements.length &&
-      !selectedElements.some((element) => isFrameLikeElement(element))
-    ) {
+    // (frames are wrapped too, nesting them)
+    if (selectedElements.length) {
       return wrapInFrame(elements, appState, selectedElements, this.app);
     }
 

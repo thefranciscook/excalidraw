@@ -15,6 +15,7 @@ import {
 } from "@excalidraw/element";
 import {
   elementOverlapsWithFrame,
+  getFrameAncestors,
   getTargetFrame,
   isFrameClippable,
   shouldApplyFrameClip,
@@ -440,7 +441,8 @@ const _renderStaticScene = ({
       return;
     }
     const targetFrame = getTargetFrame(element, elementsMap, appState);
-    if (!targetFrame) {
+    // (the frame exported alone clips everything already)
+    if (!targetFrame || targetFrame.id === renderConfig.clipToFrame?.id) {
       return;
     }
     const frameState = getRenderState(targetFrame);
@@ -462,6 +464,23 @@ const _renderStaticScene = ({
       )
     ) {
       frameClip(frame, context, renderConfig, appState);
+      // nested frames: also clipped by the frames containing the frame (the
+      // clips intersect)
+      for (const ancestor of getFrameAncestors(targetFrame, elementsMap)) {
+        if (ancestor.id === renderConfig.clipToFrame?.id) {
+          // (the export's own clip)
+          break;
+        }
+        frameClip(
+          getRenderElementWithPositionOverride(
+            ancestor,
+            getRenderState(ancestor).offset,
+          ),
+          context,
+          renderConfig,
+          appState,
+        );
+      }
     }
   };
 

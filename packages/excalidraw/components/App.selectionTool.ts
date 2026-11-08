@@ -18,6 +18,9 @@ import {
   getCommonFrameId,
   getElementAbsoluteCoords,
   getElementsInGroup,
+  getFrameAncestors,
+  hasFrameAncestorIn,
+  normalizeNestedFrameOrder,
   getElementsInResizingFrame,
   getElementWithTransformHandleType,
   getFrameChildren,
@@ -790,15 +793,15 @@ export class AppSelectionTool {
         return true;
       }
 
-      const selectedElementsHasAFrame = selectedElements.some((e) =>
-        isFrameLikeElement(e),
+      // (frames can be dragged into frames too: the dragged frames, and the
+      // frames in them, are excluded)
+      const frameToHighlight = this.app.getTopLayerFrameAtSceneCoords(
+        pointerCoords,
+        {
+          currentFrameId: getCommonFrameId(selectedElements),
+          excludeElementIds: this.app.state.selectedElementIds,
+        },
       );
-      const frameToHighlight = selectedElementsHasAFrame
-        ? null
-        : this.app.getTopLayerFrameAtSceneCoords(pointerCoords, {
-            currentFrameId: getCommonFrameId(selectedElements),
-            excludeElementIds: this.app.state.selectedElementIds,
-          });
       // Only update the state if there is a difference
       this.app.updateFrameToHighlight(frameToHighlight);
 
@@ -1221,7 +1224,11 @@ export class AppSelectionTool {
     // the dragged arrows, and those bound to the dragged elements
     removeArrowsWithoutEndInFrame(selectedElements, nextElements);
 
-    this.app.scene.replaceAllElements(nextElements);
+    // frames moved into (or out of) frames: child frames above their parent's
+    // other children
+    this.app.scene.replaceAllElements(
+      normalizeNestedFrameOrder(Array.from(nextElements.values())),
+    );
   };
 
   /**
@@ -1350,10 +1357,15 @@ export class AppSelectionTool {
           }
         } else if (
           hitElement.frameId &&
-          this.app.state.selectedElementIds[hitElement.frameId]
+          hasFrameAncestorIn(
+            hitElement,
+            this.app.state.selectedElementIds,
+            this.app.scene.getNonDeletedElementsMap(),
+          )
         ) {
-          // when hitElement is part of a selected frame, deselect the frame
-          // to avoid frame and containing elements selected simultaneously
+          // when hitElement is part of a selected frame (at any depth),
+          // deselect the frame to avoid frame and containing elements selected
+          // simultaneously
           this.app.setState((prevState) => {
             const nextSelectedElementIds: {
               [id: string]: true;
@@ -1361,17 +1373,28 @@ export class AppSelectionTool {
               ...prevState.selectedElementIds,
               [hitElement.id]: true,
             };
-            // deselect the frame
-            delete nextSelectedElementIds[hitElement.frameId!];
+            for (const frame of getFrameAncestors(
+              hitElement,
+              this.app.scene.getNonDeletedElementsMap(),
+            )) {
+              if (!prevState.selectedElementIds[frame.id]) {
+                continue;
+              }
+              // deselect the frame
+              delete nextSelectedElementIds[frame.id];
 
-            // deselect groups containing the frame
-            (this.app.scene.getElement(hitElement.frameId!)?.groupIds ?? [])
-              .flatMap((gid) =>
-                getElementsInGroup(this.app.scene.getNonDeletedElements(), gid),
-              )
-              .forEach((element) => {
-                delete nextSelectedElementIds[element.id];
-              });
+              // deselect groups containing the frame
+              frame.groupIds
+                .flatMap((gid) =>
+                  getElementsInGroup(
+                    this.app.scene.getNonDeletedElements(),
+                    gid,
+                  ),
+                )
+                .forEach((element) => {
+                  delete nextSelectedElementIds[element.id];
+                });
+            }
 
             return {
               ...selectGroupsForSelectedElements(

@@ -8,6 +8,7 @@ import {
   getCommonBounds,
   getSelectedElements,
   getSelectedGroupForElement,
+  hasFrameAncestorIn,
   isBoundToContainer,
   isEmbeddableElement,
   isFrameLikeElement,
@@ -306,8 +307,10 @@ export const getSelectionStateForElements = (
     }
   }
   const selectedElementIds: Record<ExcalidrawElement["id"], true> = {};
+  const allElementsMap = arrayToMap(allElements);
   for (const element of elements) {
-    if (!element.frameId || !selectedFrameIds.has(element.frameId)) {
+    // in a selected frame, at any depth
+    if (!hasFrameAncestorIn(element, selectedFrameIds, allElementsMap)) {
       selectedElementIds[element.id] = true;
     }
   }
@@ -374,19 +377,20 @@ export const getSelectionStateAddingElements = (
     allElements,
     appState.editingGroupId,
   );
+  const allElementsMap = arrayToMap(allElements);
   for (const element of elements) {
+    // in a selected (or added) frame, at any depth
     if (
-      !isFrameLikeElement(element) &&
       element.frameId &&
-      (nextSelectedElementIds[element.frameId] ||
-        framesInAddedGroups.has(element.frameId))
+      (hasFrameAncestorIn(element, nextSelectedElementIds, allElementsMap) ||
+        hasFrameAncestorIn(element, framesInAddedGroups, allElementsMap))
     ) {
       delete nextSelectedElementIds[element.id];
     }
   }
 
-  // deselect the previously selected children of those frames (and their
-  // groups)
+  // deselect the previously selected children of those frames, at any depth
+  // (and their groups)
   if (addedFrameIds.size || framesInAddedGroups.size) {
     const deselectedGroupIds = new Set<string>();
     for (const element of allElements) {
@@ -394,10 +398,10 @@ export const getSelectionStateAddingElements = (
       if (!frameId || !appState.selectedElementIds[element.id]) {
         continue;
       }
-      if (addedFrameIds.has(frameId)) {
+      if (hasFrameAncestorIn(element, addedFrameIds, allElementsMap)) {
         delete nextSelectedElementIds[element.id];
       }
-      if (framesInAddedGroups.has(frameId)) {
+      if (hasFrameAncestorIn(element, framesInAddedGroups, allElementsMap)) {
         delete nextSelectedElementIds[element.id];
         for (const groupId of element.groupIds) {
           deselectedGroupIds.add(groupId);
