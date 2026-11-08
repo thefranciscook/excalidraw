@@ -160,6 +160,10 @@ import {
   hasBoundingBox,
   getFrameChildrenInsertionIndex,
   isCursorInFrame,
+  getFrameAncestors,
+  hasFrameAncestorIn,
+  isFrameAbove,
+  normalizeNestedFrameOrder,
   isFrameClippable,
   addElementsToFrame,
   replaceAllElementsInFrame,
@@ -2164,7 +2168,17 @@ class App extends React.Component<AppProps, AppState> {
           : null
         : null;
 
-    return nonDeletedFramesLikes.map((f) => {
+    // nested frames' names over their parents' (later in the DOM)
+    const framesElementsMap = this.scene.getNonDeletedElementsMap();
+    const framesByDepth = nonDeletedFramesLikes
+      .map((frame) => ({
+        frame,
+        depth: getFrameAncestors(frame, framesElementsMap).length,
+      }))
+      .sort((a, b) => a.depth - b.depth)
+      .map(({ frame }) => frame);
+
+    return framesByDepth.map((f) => {
       // The name is a decoration that follows the frame's render overrides,
       // except while it's being edited: editing is interaction and keeps to
       // document geometry like everything else interactive. Culling by the
@@ -6103,10 +6117,14 @@ class App extends React.Component<AppProps, AppState> {
       // visually clipped by their containing frames
       !isIframeLikeElement(element) &&
       isFrameClippable(element, elementsMap) &&
-      !isCursorInFrame(
-        { x, y },
-        containingFrame as NonDeleted<ExcalidrawFrameLikeElement>,
-        elementsMap,
+      // clipped by every frame containing it (nested frames)
+      getFrameAncestors(element, elementsMap).some(
+        (frame) =>
+          !isCursorInFrame(
+            { x, y },
+            frame as NonDeleted<ExcalidrawFrameLikeElement>,
+            elementsMap,
+          ),
       )
     );
   }
@@ -6716,18 +6734,38 @@ class App extends React.Component<AppProps, AppState> {
     },
   ) => {
     const elementsMap = this.scene.getNonDeletedElementsMap();
-    const framesUnderCursor = this.scene
-      .getNonDeletedFramesLikes()
-      .filter(
-        (frame) =>
-          !frame.locked && isCursorInFrame(sceneCoords, frame, elementsMap),
-      );
+    const excludeElementIds = opts?.excludeElementIds;
+    const framesUnderCursor = this.scene.getNonDeletedFramesLikes().filter(
+      (frame) =>
+        !frame.locked &&
+        // not a frame being dragged, nor one inside it
+        !(
+          excludeElementIds &&
+          (excludeElementIds[frame.id] ||
+            hasFrameAncestorIn(frame, excludeElementIds, elementsMap))
+        ) &&
+        isCursorInFrame(sceneCoords, frame, elementsMap) &&
+        // nested frames are only visible within the frames containing them
+        getFrameAncestors(frame, elementsMap).every((ancestor) =>
+          isCursorInFrame(
+            sceneCoords,
+            ancestor as NonDeleted<ExcalidrawFrameLikeElement>,
+            elementsMap,
+          ),
+        ),
+    );
 
     if (!framesUnderCursor.length) {
       return null;
     }
 
-    const topLayerFrame = framesUnderCursor.at(-1)!;
+    // the one shown on top: nested frames are above the frames containing
+    // them (which close their blocks, so aren't simply ordered by index)
+    const getIndex = (element: ExcalidrawElement) =>
+      this.scene.getElementIndex(element.id);
+    const topLayerFrame = framesUnderCursor.reduce((top, frame) =>
+      isFrameAbove(frame, top, elementsMap, getIndex) ? frame : top,
+    );
 
     const hitElement = this.getElementsAtPosition(
       sceneCoords.x,
@@ -6819,7 +6857,10 @@ class App extends React.Component<AppProps, AppState> {
     for (const element of elements) {
       const currentChunk = chunkedElements[chunkedElements.length - 1];
 
-      if (currentChunk?.[0].frameId === element.frameId) {
+      if (
+        currentChunk?.[0].frameId === element.frameId &&
+        isFrameLikeElement(currentChunk[0]) === isFrameLikeElement(element)
+      ) {
         currentChunk.push(element);
       } else {
         chunkedElements.push([element]);
@@ -6829,10 +6870,12 @@ class App extends React.Component<AppProps, AppState> {
     for (const chunk of chunkedElements) {
       const frameId = chunk[0].frameId;
 
+      // nested frames go above their parent's other children
       const insertionIndex = frameId
         ? getFrameChildrenInsertionIndex(
             this.scene.getElementsIncludingDeleted(),
             frameId,
+            { asFrame: isFrameLikeElement(chunk[0]) },
           )
         : null;
       this.scene.insertElementsAtIndex(chunk, insertionIndex);
@@ -8898,11 +8941,18 @@ class App extends React.Component<AppProps, AppState> {
         : this.getEffectiveGridSize(),
     );
 
+    // frames drawn inside a frame are nested in it
+    const parentFrame = this.getTopLayerFrameAtSceneCoords({
+      x: gridX,
+      y: gridY,
+    });
+
     const constructorOpts = {
       x: gridX,
       y: gridY,
       opacity: this.state.currentItemOpacity,
       locked: false,
+      frameId: parentFrame ? parentFrame.id : null,
       ...FRAME_STYLE,
     } as const;
 
@@ -9984,10 +10034,12 @@ class App extends React.Component<AppProps, AppState> {
         );
 
         this.scene.replaceAllElements(
-          addElementsToFrame(
-            this.scene.getElementsMapIncludingDeleted(),
-            elementsInsideFrame,
-            newElement,
+          normalizeNestedFrameOrder(
+            addElementsToFrame(
+              this.scene.getElementsIncludingDeleted(),
+              elementsInsideFrame,
+              newElement,
+            ),
           ),
         );
       }
@@ -10034,9 +10086,16 @@ class App extends React.Component<AppProps, AppState> {
                   groupIds: [],
                 });
 
+                // (to the frame containing its frame, if still in it)
                 removeElementsFromFrame(
                   [linearElement],
                   this.scene.getNonDeletedElementsMap(),
+                  { reparent: true },
+                );
+                this.scene.replaceAllElements(
+                  normalizeNestedFrameOrder(
+                    this.scene.getElementsIncludingDeleted(),
+                  ),
                 );
 
                 this.scene.triggerUpdate();
@@ -10372,10 +10431,16 @@ class App extends React.Component<AppProps, AppState> {
       }
     });
 
+    const erasedElementsMap = this.scene.getElementsMapIncludingDeleted();
     const elements = this.scene.getElementsIncludingDeleted().map((ele) => {
       if (
         this.elementsPendingErasure.has(ele.id) ||
-        (ele.frameId && this.elementsPendingErasure.has(ele.frameId)) ||
+        // in an erased frame, at any depth
+        hasFrameAncestorIn(
+          ele,
+          this.elementsPendingErasure,
+          erasedElementsMap,
+        ) ||
         (isBoundToContainer(ele) &&
           this.elementsPendingErasure.has(ele.containerId))
       ) {

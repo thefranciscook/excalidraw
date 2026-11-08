@@ -76,7 +76,7 @@ import {
   isFrameLikeElement,
   isImageElement,
 } from "./typeChecks";
-import { getContainingFrame } from "./frame";
+import { getFrameAncestors } from "./frame";
 import { getCornerRadius } from "./utils";
 
 import { ShapeCache, getFrameOutlineElement } from "./shape";
@@ -165,6 +165,27 @@ export type ElementRenderState = Readonly<{
   offset: RenderPositionOffset;
 }>;
 
+/**
+ * The opacity (0–100) of the frames containing the element, multiplied
+ * (nested frames).
+ */
+const getContainingFramesOpacity = (
+  element: ExcalidrawElement,
+  elementsMap: ElementsMap,
+  elementRenderOverrides?: StaticCanvasRenderConfig["elementRenderOverrides"],
+) =>
+  getFrameAncestors(element, elementsMap).reduce(
+    (opacity, frame) =>
+      (opacity *
+        clamp(
+          elementRenderOverrides?.get(frame.id)?.opacity ?? frame.opacity,
+          0,
+          100,
+        )) /
+      100,
+    100,
+  );
+
 /** Resolve visual state at the drawing boundary, preserving document cache keys. */
 export const resolveElementRenderState = (
   element: ExcalidrawElement,
@@ -183,15 +204,13 @@ export const resolveElementRenderState = (
     pendingFlowchartNodes,
   } = renderConfig;
   const override = elementRenderOverrides?.get(element.id);
-  const containingFrame = getContainingFrame(element, elementsMap);
-  const frameOpacity = containingFrame
-    ? clamp(
-        elementRenderOverrides?.get(containingFrame.id)?.opacity ??
-          containingFrame.opacity,
-        0,
-        100,
-      )
-    : 100;
+  // nested frames: the frames containing it, at any depth
+  const containingFrames = getFrameAncestors(element, elementsMap);
+  const frameOpacity = getContainingFramesOpacity(
+    element,
+    elementsMap,
+    elementRenderOverrides,
+  );
   // Frame and element alpha multiply (50% each produces 25%).
   let opacity =
     (frameOpacity * clamp(override?.opacity ?? element.opacity, 0, 100)) /
@@ -199,7 +218,7 @@ export const resolveElementRenderState = (
   if (
     elementsPendingErasure.has(element.id) ||
     pendingFlowchartNodes?.some((node) => node.id === element.id) ||
-    (containingFrame && elementsPendingErasure.has(containingFrame.id))
+    containingFrames.some((frame) => elementsPendingErasure.has(frame.id))
   ) {
     opacity *= ELEMENT_READY_TO_ERASE_OPACITY / 100;
   }
@@ -345,8 +364,7 @@ const generateElementCanvas = (
     zoomValue: zoom.value,
     canvasOffsetX,
     canvasOffsetY,
-    containingFrameOpacity:
-      getContainingFrame(element, elementsMap)?.opacity || 100,
+    containingFrameOpacity: getContainingFramesOpacity(element, elementsMap),
     imageCrop: isImageElement(element) ? element.crop : null,
   };
 };
@@ -820,8 +838,10 @@ const generateElementWithCanvas = (
     !appState?.shouldCacheIgnoreZoom;
   const imageCrop = isImageElement(element) ? element.crop : null;
 
-  const containingFrameOpacity =
-    getContainingFrame(element, elementsMap)?.opacity || 100;
+  const containingFrameOpacity = getContainingFramesOpacity(
+    element,
+    elementsMap,
+  );
 
   if (
     !prevElementWithCanvas ||
@@ -1154,8 +1174,13 @@ const drawElement = (
 ) => {
   switch (element.type) {
     case "frame": {
-      // hand-drawn black outline, drawn like a rectangle
-      if (appState.frameRendering.enabled && appState.frameRendering.outline) {
+      // hand-drawn black outline, drawn like a rectangle (not for the frame
+      // exported alone)
+      if (
+        appState.frameRendering.enabled &&
+        appState.frameRendering.outline &&
+        renderConfig.clipToFrame?.id !== element.id
+      ) {
         withSavedContext(context, () => {
           context.translate(
             element.x + appState.scrollX,
@@ -1179,7 +1204,11 @@ const drawElement = (
       break;
     }
     case "magicframe": {
-      if (appState.frameRendering.enabled && appState.frameRendering.outline) {
+      if (
+        appState.frameRendering.enabled &&
+        appState.frameRendering.outline &&
+        renderConfig.clipToFrame?.id !== element.id
+      ) {
         withSavedContext(context, () => {
           context.translate(
             element.x + appState.scrollX,

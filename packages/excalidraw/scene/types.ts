@@ -84,6 +84,8 @@ export type SVGRenderConfig = {
    */
   reuseImages: boolean;
   theme: AppState["theme"];
+  /** the frame exported alone, if any: not decorated, nor clipped to here */
+  exportingFrameId?: ExcalidrawElement["id"] | null;
 };
 
 export type InteractiveCanvasRenderConfig = {

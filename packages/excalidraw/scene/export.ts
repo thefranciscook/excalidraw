@@ -33,6 +33,7 @@ import { isFrameLikeElement } from "@excalidraw/element";
 
 import {
   getElementsOverlappingFrame,
+  isFrameDescendantOf,
   getFrameLikeElements,
   getFrameLikeTitle,
   getRootElements,
@@ -135,11 +136,16 @@ const truncateText = (
  */
 const addFrameLabelsAsTextElements = (
   elements: readonly NonDeletedExcalidrawElement[],
-  opts: { theme: Theme; renderEnvironment: RenderEnvironment },
+  opts: {
+    theme: Theme;
+    renderEnvironment: RenderEnvironment;
+    /** the exported frame, which has no label */
+    exportingFrame?: ExcalidrawFrameLikeElement | null;
+  },
 ) => {
   const nextElements: NonDeletedExcalidrawElement[] = [];
   for (const element of elements) {
-    if (isFrameLikeElement(element)) {
+    if (isFrameLikeElement(element) && element.id !== opts.exportingFrame?.id) {
       let textElement: Mutable<NonDeleted<ExcalidrawTextElement>> =
         newTextElement({
           x: element.x,
@@ -174,13 +180,18 @@ const addFrameLabelsAsTextElements = (
   return nextElements;
 };
 
+/**
+ * An exported frame never gets its own decorations; the frames nested in it
+ * get theirs (per `frames`), and their contents are clipped to them.
+ */
 const getFrameRenderingConfig = (
   exportingFrame: ExcalidrawFrameLikeElement | null,
   frames: ExportSceneBaseConfig["frames"],
+  hasNestedFrames: boolean,
 ): AppState["frameRendering"] => ({
   enabled: true,
-  outline: exportingFrame ? false : frames?.outline ?? true,
-  name: exportingFrame ? false : frames?.name ?? true,
+  outline: exportingFrame && !hasNestedFrames ? false : frames?.outline ?? true,
+  name: exportingFrame && !hasNestedFrames ? false : frames?.name ?? true,
   clip: exportingFrame ? true : frames?.clip ?? true,
 });
 
@@ -200,11 +211,35 @@ const prepareElementsForRender = ({
   let nextElements: readonly NonDeletedExcalidrawElement[];
 
   if (exportingFrame) {
+    const elementsMap = arrayToMap(elements);
     nextElements = getElementsOverlappingFrame(
       elements,
       exportingFrame,
-      arrayToMap(elements),
+      elementsMap,
     );
+    // the frames nested in it are shown (others overlapping it aren't, as
+    // when there are none)
+    if (
+      nextElements.some(
+        (element) =>
+          isFrameLikeElement(element) &&
+          isFrameDescendantOf(element, exportingFrame.id, elementsMap),
+      )
+    ) {
+      nextElements = nextElements.filter(
+        (element) =>
+          !isFrameLikeElement(element) ||
+          element.id === exportingFrame.id ||
+          isFrameDescendantOf(element, exportingFrame.id, elementsMap),
+      );
+      if (frameRendering.name) {
+        nextElements = addFrameLabelsAsTextElements(nextElements, {
+          theme,
+          renderEnvironment,
+          exportingFrame,
+        });
+      }
+    }
   } else if (frameRendering.enabled && frameRendering.name) {
     nextElements = addFrameLabelsAsTextElements(elements, {
       theme,
@@ -349,9 +384,9 @@ type ExportSceneBaseConfig = {
 
   exportingFrame?: NonDeleted<ExcalidrawFrameLikeElement> | null;
   /**
-   * Which frame decorations to render. Ignored when exporting a single frame
-   * (`exportingFrame`), which renders neither its name nor outline, and clips
-   * to it.
+   * Which frame decorations to render. When exporting a single frame
+   * (`exportingFrame`), it renders neither its name nor outline, and clips to
+   * it; this applies then to the frames nested in it only.
    *
    * @default { name: true, outline: true, clip: true }
    */
@@ -595,14 +630,23 @@ const configExportDimension = async ({
   const paintedBackgroundColor =
     cfg.canvasBackgroundColor === false ? "transparent" : backgroundColor;
 
+  const hasNestedFrames =
+    !!exportingFrame &&
+    elements.some(
+      (element) =>
+        isFrameLikeElement(element) &&
+        isFrameDescendantOf(element, exportingFrame.id, arrayToMap(elements)),
+    );
   const frameRendering = getFrameRenderingConfig(
     exportingFrame ?? null,
     cfg.frames,
+    hasNestedFrames,
   );
   // when exporting a frame, everything drawn is clipped to the frame as a
   // whole, with square corners (see `exportToCanvas`/`exportToSvg`) — the
-  // per-element frame clips would round the corners of the content
-  if (exportingFrame) {
+  // per-element frame clips would round the corners of the content (the
+  // frames nested in it still clip theirs: the renderers skip its own clip)
+  if (exportingFrame && !hasNestedFrames) {
     frameRendering.clip = false;
   }
 
@@ -1179,6 +1223,7 @@ const exportToSvg = async ({
         : new Map(),
       reuseImages: config?.reuseImages ?? true,
       theme,
+      exportingFrameId: cfg.exportingFrame?.id ?? null,
     },
   );
 

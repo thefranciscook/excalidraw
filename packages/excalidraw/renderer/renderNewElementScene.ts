@@ -1,6 +1,7 @@
 import { throttleRAF } from "@excalidraw/common";
 
 import {
+  getFrameAncestors,
   getTargetFrame,
   isInvisiblySmallElement,
   renderElement,
@@ -69,7 +70,13 @@ const _renderNewElementScene = ({
           frame &&
           shouldApplyFrameClip(newElement, frame, appState, elementsMap)
         ) {
-          frameClip(frame, context, renderConfig, appState);
+          // nested frames: clipped by the frames containing it as well
+          for (const clip of [
+            frame,
+            ...getFrameAncestors(frame, elementsMap),
+          ]) {
+            frameClip(clip, context, renderConfig, appState);
+          }
         }
       }
 

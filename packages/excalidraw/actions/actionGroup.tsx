@@ -2,7 +2,7 @@ import { getNonDeletedElements } from "@excalidraw/element";
 
 import { newElementWith } from "@excalidraw/element";
 
-import { isBoundToContainer } from "@excalidraw/element";
+import { isBoundToContainer, isFrameLikeElement } from "@excalidraw/element";
 
 import {
   frameAndChildrenSelectedTogether,
@@ -80,7 +80,11 @@ const enableActionGroup = (appState: UIAppState, app: AppClassProperties) => {
   return (
     selectedElements.length >= 2 &&
     !allElementsInSameGroup(selectedElements, appState.editingGroupId) &&
-    !frameAndChildrenSelectedTogether(selectedElements)
+    !frameAndChildrenSelectedTogether(selectedElements) &&
+    // groups with frames aren't in frames, so nested frames can't be grouped
+    !selectedElements.some(
+      (element) => isFrameLikeElement(element) && element.frameId,
+    )
   );
 };
 

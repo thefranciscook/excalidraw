@@ -1,12 +1,12 @@
 import {
   getCommonFrameId,
-  getFrameChildrenInsertionIndex,
+  getElementsReorderedIntoFrame,
   getContainerElement,
   isElementInViewport,
   isTextElement,
 } from "@excalidraw/element";
 
-import { arrayToMap, memoize, toBrandedType } from "@excalidraw/common";
+import { memoize, toBrandedType } from "@excalidraw/common";
 
 import type {
   ExcalidrawElement,
@@ -285,28 +285,15 @@ export class Renderer {
     }
 
     // we assume all selected elements are eligible frame children if
-    // frameToHighlight is defined
-    const selectedElementsMap = arrayToMap(selectedElements);
-
-    // thus, all deselected elements are the ones we won't reorder
-    const deselectedElements = visibleElements.filter(
-      (element) => !selectedElementsMap.has(element.id),
+    // frameToHighlight is defined (dragged frames bring what's in them, into
+    // its child-frame layer)
+    return (
+      getElementsReorderedIntoFrame(
+        visibleElements,
+        selectedElements,
+        frameToHighlight,
+      ) ?? visibleElements
     );
-
-    const insertionIndex = getFrameChildrenInsertionIndex(
-      deselectedElements,
-      frameToHighlight.id,
-    );
-
-    if (insertionIndex === null) {
-      return visibleElements;
-    }
-
-    return [
-      ...deselectedElements.slice(0, insertionIndex),
-      ...selectedElements,
-      ...deselectedElements.slice(insertionIndex),
-    ] as readonly T[];
   }
 
   private _getRenderableElements = memoize(

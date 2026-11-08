@@ -38,7 +38,7 @@ import {
   isTextElement,
 } from "@excalidraw/element";
 
-import { getContainingFrame, isFrameClippable } from "@excalidraw/element";
+import { getFrameAncestors, isFrameClippable } from "@excalidraw/element";
 
 import { getCornerRadius, isPathALoop } from "@excalidraw/element";
 
@@ -84,6 +84,7 @@ const maybeWrapNodesInFrameClipPath = (
   nodes: SVGElement[],
   frameRendering: AppState["frameRendering"],
   elementsMap: RenderableElementsMap,
+  exportingFrameId?: ExcalidrawElement["id"] | null,
 ) => {
   if (
     !frameRendering.enabled ||
@@ -92,12 +93,21 @@ const maybeWrapNodesInFrameClipPath = (
   ) {
     return null;
   }
-  const frame = getContainingFrame(element, elementsMap);
-  if (frame) {
-    const g = root.ownerDocument.createElementNS(SVG_NS, "g");
-    g.setAttributeNS(SVG_NS, "clip-path", `url(#${frame.id})`);
-    nodes.forEach((node) => g.appendChild(node));
-    return g;
+  // nested frames: clipped by each frame containing it (nested groups, the
+  // outermost frame's outermost)
+  // (the frame exported alone clips everything already)
+  const frames = getFrameAncestors(element, elementsMap).filter(
+    (frame) => frame.id !== exportingFrameId,
+  );
+  if (frames.length) {
+    let wrapped: SVGElement[] = nodes;
+    for (const frame of frames) {
+      const g = root.ownerDocument.createElementNS(SVG_NS, "g");
+      g.setAttributeNS(SVG_NS, "clip-path", `url(#${frame.id})`);
+      wrapped.forEach((node) => g.appendChild(node));
+      wrapped = [g];
+    }
+    return wrapped[0];
   }
 
   return null;
@@ -153,8 +163,12 @@ const renderElementToSvg = (
     root.appendChild(node);
   };
 
+  // nested frames' opacities multiply
   const opacity =
-    ((getContainingFrame(element, elementsMap)?.opacity ?? 100) *
+    (getFrameAncestors(element, elementsMap).reduce(
+      (acc, frame) => (acc * frame.opacity) / 100,
+      100,
+    ) *
       element.opacity) /
     10000;
 
@@ -272,6 +286,7 @@ const renderElementToSvg = (
         [group],
         renderConfig.frameRendering,
         elementsMap,
+        renderConfig.exportingFrameId,
       );
 
       addToRoot(g || group, element);
@@ -304,6 +319,7 @@ const renderElementToSvg = (
         [node],
         renderConfig.frameRendering,
         elementsMap,
+        renderConfig.exportingFrameId,
       );
 
       addToRoot(g || node, element);
@@ -515,6 +531,7 @@ const renderElementToSvg = (
         [group, maskPath],
         renderConfig.frameRendering,
         elementsMap,
+        renderConfig.exportingFrameId,
       );
       if (g) {
         addToRoot(g, element);
@@ -581,6 +598,7 @@ const renderElementToSvg = (
         [wrapper],
         renderConfig.frameRendering,
         elementsMap,
+        renderConfig.exportingFrameId,
       );
 
       addToRoot(g || wrapper, element);
@@ -743,6 +761,7 @@ const renderElementToSvg = (
           [g],
           renderConfig.frameRendering,
           elementsMap,
+          renderConfig.exportingFrameId,
         );
         addToRoot(clipG || g, element);
       }
@@ -750,10 +769,12 @@ const renderElementToSvg = (
     }
     // frames are not rendered and only acts as a container
     case "frame": {
-      // hand-drawn black outline, drawn like a rectangle
+      // hand-drawn black outline, drawn like a rectangle (not for the frame
+      // exported alone)
       if (
         renderConfig.frameRendering.enabled &&
-        renderConfig.frameRendering.outline
+        renderConfig.frameRendering.outline &&
+        renderConfig.exportingFrameId !== element.id
       ) {
         const node = roughSVGDrawWithPrecision(
           rsvg,
@@ -777,7 +798,8 @@ const renderElementToSvg = (
     case "magicframe": {
       if (
         renderConfig.frameRendering.enabled &&
-        renderConfig.frameRendering.outline
+        renderConfig.frameRendering.outline &&
+        renderConfig.exportingFrameId !== element.id
       ) {
         const rect = svgRoot.ownerDocument.createElementNS(SVG_NS, "rect");
 
@@ -901,6 +923,7 @@ const renderElementToSvg = (
           [node],
           renderConfig.frameRendering,
           elementsMap,
+          renderConfig.exportingFrameId,
         );
 
         addToRoot(g || node, element);

@@ -37,6 +37,7 @@ import {
   isBindableElement,
   isElbowArrow,
   isFrameLikeElement,
+  getFrameAncestors,
   isImageElement,
   isLinearElement,
   isLineElement,
@@ -263,10 +264,11 @@ const renderBindingHighlightForBindableElement_simple = (
   pointerCoords: GlobalPoint | null,
   angleLocked = false,
 ) => {
-  const enclosingFrame =
-    suggestedBinding.element.frameId &&
-    elementsMap.get(suggestedBinding.element.frameId);
-  if (enclosingFrame && isFrameLikeElement(enclosingFrame)) {
+  // nested frames: clipped by every frame containing it
+  for (const enclosingFrame of getFrameAncestors(
+    suggestedBinding.element,
+    elementsMap,
+  )) {
     context.translate(enclosingFrame.x, enclosingFrame.y);
 
     context.beginPath();
@@ -540,8 +542,8 @@ const renderBindingHighlightForBindableElement_complex = (
   const opacity = clamp((1 / BIND_MODE_TIMEOUT) * remainingTime, 0.0001, 1);
   const offset = element.strokeWidth / 2;
 
-  const enclosingFrame = element.frameId && allElementsMap.get(element.frameId);
-  if (enclosingFrame && isFrameLikeElement(enclosingFrame)) {
+  // nested frames: clipped by every frame containing it
+  for (const enclosingFrame of getFrameAncestors(element, allElementsMap)) {
     context.translate(enclosingFrame.x, enclosingFrame.y);
 
     context.beginPath();

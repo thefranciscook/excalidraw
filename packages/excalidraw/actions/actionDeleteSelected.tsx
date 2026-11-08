@@ -14,7 +14,12 @@ import {
   isElbowArrow,
   isFrameLikeElement,
 } from "@excalidraw/element";
-import { getFrameChildren } from "@excalidraw/element";
+import {
+  getFrameAncestors,
+  getFrameChildren,
+  hasFrameAncestorIn,
+  normalizeNestedFrameOrder,
+} from "@excalidraw/element";
 
 import { getElementsInGroup } from "@excalidraw/element";
 
@@ -48,12 +53,29 @@ const deleteSelectedElements = (
       appState,
     ).map((el) => el.id),
   );
+  const elementsMap = app.scene.getNonDeletedElementsMap();
+
+  // taking its children along, a frame takes what's nested in them too;
+  // leaving them, only its children are left (in the frame containing it)
   const isChildOfDeletedFrame = (el: ExcalidrawElement) =>
-    !!el.frameId && framesToBeDeleted.has(el.frameId);
+    !!el.frameId &&
+    (withFrameChildren
+      ? hasFrameAncestorIn(el, framesToBeDeleted, elementsMap)
+      : framesToBeDeleted.has(el.frameId));
+
+  /** the closest frame containing the deleted one that's not deleted */
+  const getNextFrameId = (deletedFrameId: ExcalidrawElement["id"]) => {
+    const frame = elementsMap.get(deletedFrameId);
+    return (
+      (frame &&
+        getFrameAncestors(frame, elementsMap).find(
+          (ancestor) => !framesToBeDeleted.has(ancestor.id),
+        )?.id) ??
+      null
+    );
+  };
 
   const selectedElementIds: Record<ExcalidrawElement["id"], true> = {};
-
-  const elementsMap = app.scene.getNonDeletedElementsMap();
 
   const processedElements = new Set<ExcalidrawElement["id"]>();
 
@@ -125,7 +147,7 @@ const deleteSelectedElements = (
       if (!isBoundToContainer(el)) {
         selectedElementIds[el.id] = true;
       }
-      return newElementWith(el, { frameId: null });
+      return newElementWith(el, { frameId: getNextFrameId(el.frameId!) });
     }
 
     if (isBoundToContainer(el) && appState.selectedElementIds[el.containerId]) {
@@ -177,7 +199,8 @@ const deleteSelectedElements = (
   }
 
   return {
-    elements: nextElements,
+    // the children left by nested frames go into the frames containing them
+    elements: normalizeNestedFrameOrder(nextElements),
     appState: {
       ...appState,
       ...selectGroupsForSelectedElements(

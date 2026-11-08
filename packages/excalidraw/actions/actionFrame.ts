@@ -8,6 +8,8 @@ import {
 } from "@excalidraw/element";
 import {
   addElementsToFrame,
+  getCommonFrameId,
+  normalizeNestedFrameOrder,
   removeAllElementsFromFrame,
 } from "@excalidraw/element";
 import { getFrameChildren } from "@excalidraw/element";
@@ -189,12 +191,20 @@ export const unwrapFrame = (
 ): ActionResult => {
   const children = getNonDeletedElements(getFrameChildren(elements, frame.id));
 
-  removeAllElementsFromFrame(elements, frame);
+  if (frame.frameId) {
+    // nested: its children move to the frame containing it
+    for (const child of getFrameChildren(elements, frame.id)) {
+      app.scene.mutateElement(child, { frameId: frame.frameId });
+    }
+  } else {
+    removeAllElementsFromFrame(elements, frame);
+  }
   app.scene.mutateElement(frame, { isDeleted: true });
   fixBindingsAfterDeletion(elements, [frame]);
+  const nextElements = normalizeNestedFrameOrder(elements);
 
   return {
-    elements,
+    elements: nextElements,
     appState: {
       ...appState,
       ...getSelectionStateForElements(
@@ -231,6 +241,8 @@ export const wrapInFrame = (
     y: y1 - padding,
     width: x2 - x1 + padding * 2,
     height: y2 - y1 + padding * 2,
+    // nested in the frame the selection is in, if all of it is
+    frameId: getCommonFrameId(selectedElements),
   });
 
   // for a selected partial group, we want to remove it from the remainder of the group
@@ -249,10 +261,12 @@ export const wrapInFrame = (
     }
   }
 
-  const nextElements = addElementsToFrame(
-    [...app.scene.getElementsIncludingDeleted(), frame],
-    selectedElements,
-    frame,
+  const nextElements = normalizeNestedFrameOrder(
+    addElementsToFrame(
+      [...app.scene.getElementsIncludingDeleted(), frame],
+      selectedElements,
+      frame,
+    ),
   );
 
   return {
@@ -283,9 +297,14 @@ export const actionWrapSelectionInFrame = register({
   predicate: (elements, appState, _, app) => {
     const selectedElements = getSelectedElements(elements, appState);
 
+    // frames can be wrapped too (nesting them), but not a single frame
     return (
       selectedElements.length > 0 &&
-      !selectedElements.some((element) => isFrameLikeElement(element))
+      (!selectedElements.some((element) => isFrameLikeElement(element)) ||
+        !getFrameToUnwrap(
+          selectedElements,
+          app.scene.getNonDeletedElementsMap(),
+        ))
     );
   },
   perform: (elements, appState, _, app) => {

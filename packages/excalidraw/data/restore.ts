@@ -70,6 +70,7 @@ import {
   isElbowArrow,
   isLinearElement,
   isLineElement,
+  isFrameLikeElement,
   isTextElement,
   isUsingAdaptiveRadius,
 } from "@excalidraw/element";
@@ -894,7 +895,9 @@ const repairBoundTextElementOrder = (
 };
 
 /**
- * Remove an element's frameId if its containing frame is non-existent
+ * Remove an element's frameId if its containing frame is non-existent, isn't
+ * a frame, or is the element itself or inside it (frames nest: a cycle is cut
+ * where it's found)
  *
  * NOTE mutates elements.
  */
@@ -905,8 +908,20 @@ const repairFrameMembership = (
   if (element.frameId) {
     const containingFrame = elementsMap.get(element.frameId);
 
-    if (!containingFrame) {
+    if (!containingFrame || !isFrameLikeElement(containingFrame)) {
       element.frameId = null;
+      return;
+    }
+
+    const visited = new Set<string>();
+    let frame: ExcalidrawElement | undefined = containingFrame;
+    while (frame && !visited.has(frame.id)) {
+      if (frame.id === element.id) {
+        element.frameId = null;
+        return;
+      }
+      visited.add(frame.id);
+      frame = frame.frameId ? elementsMap.get(frame.frameId) : undefined;
     }
   }
 };
