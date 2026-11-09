@@ -115,6 +115,7 @@
   }
   body.dragging .drop-overlay { display: grid; }
   .notice { background: var(--accent-soft); border-radius: 10px; padding: 10px 14px; margin-bottom: 20px; }
+  .notice a { color: var(--accent); font-weight: 600; }
   .error { color: var(--danger); }
   .skeleton { height: 230px; border-radius: 14px; background: var(--surface); border: 1px solid var(--border); opacity: .6; }
 
@@ -258,6 +259,7 @@ const render = (boards) => {
         </button>
         <div class="menu" role="menu">
           <button type="button" data-action="rename">Rename</button>
+          <button type="button" data-action="duplicate">Duplicate</button>
           <button type="button" data-action="delete" class="danger">Delete</button>
         </div>
       </a>`).join("");
@@ -368,6 +370,9 @@ grid.addEventListener("click", async (ev) => {
       const name = prompt("Rename board:", current);
       if (name === null || name.trim() === current) return;
       await api(`/api/boards/${id}`, { method: "PATCH", body: JSON.stringify({ name }) });
+    } else if (actionBtn.dataset.action === "duplicate") {
+      const copy = await api(`/api/boards/${id}/duplicate`, { method: "POST" });
+      notice(`Duplicated "${esc(current)}" as <a href="/b/${copy.id}">${esc(copy.name)}</a>.`);
     } else if (confirm(`Delete "${current}"? It's moved to the server's trash folder, so it can still be recovered.`)) {
       await api(`/api/boards/${id}`, { method: "DELETE" });
     } else {
