@@ -1,10 +1,12 @@
-// Renders a board or frame on the server with the deployed read-only render
-// page (render/render.html, this fork's own exportScene) in headless Chromium.
+// Renders a board or frame on the server with the deployed render page
+// (render/render.html, this fork's own exportScene) in headless Chromium, and
+// builds Claude's edits with the ops page (render/ops.html).
 //
 // The page is loaded from a made-up origin and every request it makes is
 // answered here: page files from the web root, /api/boards/:id and
 // /api/files/:id from the board store. So it never goes through Caddy's
-// login, and it can only read.
+// login, and it can only read. The ops page gets the board's elements handed
+// in and hands the changed ones back; saving them is up to the connector.
 //
 // Needs the `playwright` package and its Chromium (see README). Without them,
 // render() returns { error } and the connector sends text and images only.
@@ -37,8 +39,8 @@ module.exports = function createRenderer({ renderDir, readBoard, getFile }) {
     }
   };
 
-  const available = () => {
-    if (!fs.existsSync(path.join(renderDir, "render.html"))) {
+  const available = (page = "render.html") => {
+    if (!fs.existsSync(path.join(renderDir, page))) {
       return `the render page isn't deployed in ${renderDir} (run rebuild.sh)`;
     }
     if (!loadPlaywright()) return "Playwright isn't installed on the server (see whiteboard-sync/README.md)";
@@ -135,13 +137,14 @@ module.exports = function createRenderer({ renderDir, readBoard, getFile }) {
   };
 
   // -> { dataURL, mimeType, width, height, missingFiles } or { error }
-  const render = async ({ boardId, frameId, maxSide, format = "jpeg" }) => {
+  const render = async ({ boardId, frameId, maxSide, format = "jpeg", highlight }) => {
     const unavailable = available();
     if (unavailable) return { error: unavailable };
     try {
       return await withPage(async (page) => {
         const hash = new URLSearchParams({ board: boardId, max: String(maxSide), format });
         if (frameId) hash.set("frame", frameId);
+        if (highlight && highlight.length) hash.set("highlight", highlight.slice(0, 500).join(","));
         await page.goto(`${ORIGIN}/render/render.html#${hash}`);
         await page.waitForFunction(() => window.__whiteboardRender, null, { timeout: RENDER_TIMEOUT_MS });
         const result = await page.evaluate(() => window.__whiteboardRender);
@@ -157,6 +160,19 @@ module.exports = function createRenderer({ renderDir, readBoard, getFile }) {
     } catch (e) {
       return { error: `rendering failed: ${String(e.message || e).split("\n")[0]}` };
     }
+  };
+
+  // Builds edits ({add, update, delete}, see render/ops.ts) against the
+  // board's elements. -> { ok, changed, created, updated, deleted, warnings }
+  // or { ok: false, error }. Throws when there's no browser to do it in.
+  const runOps = async ({ elements, ops }) => {
+    const unavailable = available("ops.html");
+    if (unavailable) throw new Error(`Can't edit boards: ${unavailable}`);
+    return withPage(async (page) => {
+      await page.goto(`${ORIGIN}/render/ops.html`);
+      await page.waitForFunction(() => window.__whiteboardOpsReady, null, { timeout: RENDER_TIMEOUT_MS });
+      return page.evaluate(({ elements, ops }) => window.__whiteboardOps({ elements }, ops), { elements, ops });
+    });
   };
 
   // Scales an image down to fit maxSide (and re-encodes it as JPEG) when it's
@@ -202,5 +218,5 @@ module.exports = function createRenderer({ renderDir, readBoard, getFile }) {
     }
   };
 
-  return { render, shrinkImage, available };
+  return { render, runOps, shrinkImage, available };
 };

@@ -92,6 +92,9 @@ const VIEW_SCRIPT = String.raw`
     link = l ? l[1] : null;
     var title = t ? t[1] : lastArgs && lastArgs.file_id ? "Image" : "Whiteboard";
     var images = content.filter(function (c) { return c.type === "image" && c.data; });
+    // drawing tools also put their picture in structuredContent
+    var sc = (result && result.structuredContent) || {};
+    if (!images.length && sc.images && sc.images.length) images = sc.images;
     if (images.length || !lastArgs) return draw(title, images);
 
     // the host passed the result on without its images: ask the server for them

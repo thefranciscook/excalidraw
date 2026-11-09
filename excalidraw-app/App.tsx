@@ -719,6 +719,43 @@ const ExcalidrawWrapper = () => {
     };
   }, [excalidrawAPI]);
 
+  // self-hosted whiteboard (whiteboard-sync/server-sync.js): the server merges
+  // saves per element, so Claude (via the connector) can draw on a board while
+  // it's open here. These let server-sync.js send the scene including deleted
+  // elements (local storage keeps only the others, and a missing element isn't
+  // a deleted one), and merge the server's elements in the way a collaboration
+  // room does, keeping what's being edited here and out of the undo history.
+  useEffect(() => {
+    if (!excalidrawAPI) {
+      return;
+    }
+    const hooks = window as {
+      wbGetElements?: () => readonly OrderedExcalidrawElement[];
+      wbMergeRemote?: (elements: readonly OrderedExcalidrawElement[]) => void;
+    };
+    hooks.wbGetElements = () =>
+      excalidrawAPI.getSceneElementsIncludingDeleted();
+    hooks.wbMergeRemote = (remoteElements) => {
+      const localElements = excalidrawAPI.getSceneElementsIncludingDeleted();
+      const reconciled = reconcileElements(
+        localElements,
+        restoreElements(
+          remoteElements,
+          localElements,
+        ) as RemoteExcalidrawElement[],
+        excalidrawAPI.getAppState(),
+      );
+      excalidrawAPI.updateScene({
+        elements: reconciled,
+        captureUpdate: CaptureUpdateAction.NEVER,
+      });
+    };
+    return () => {
+      delete hooks.wbGetElements;
+      delete hooks.wbMergeRemote;
+    };
+  }, [excalidrawAPI]);
+
   const onChange = (
     elements: readonly OrderedExcalidrawElement[],
     appState: AppState,
