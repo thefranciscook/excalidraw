@@ -1,6 +1,12 @@
 // Gives each board (/b/<id>) its own localStorage scene and mirrors it to the
 // server (/api/boards/<id>). Loaded as a classic script before the Excalidraw
 // bundle, so the board's server copy is in place by the time Excalidraw boots.
+//
+// The server merges saves per element (scene.js), and others (Claude, through
+// the connector, or another device) may change the board while it's open
+// here. Their changes are picked up within a couple of seconds and merged into
+// the open scene through hooks the app sets (wbMergeRemote, wbGetElements in
+// excalidraw-app App.tsx).
 (function () {
   var match = location.pathname.match(/^\/b\/([a-z0-9]{10})\/?$/);
   if (!match) {
@@ -49,11 +55,21 @@
     rawSet.call(localStorage, SYNCED_KEY, JSON.stringify(v));
   };
 
+  // the board's server revision this tab has (see GET /api/boards/<id>/head)
+  var knownRev = -1;
+
+  // Replaces the local copy with the server's (before boot, or when the app's
+  // merge hook isn't there). Versions are this browser's clock, like the
+  // app's own saves, so later local saves always count as newer.
   var applyServerScene = function (scene) {
-    set("excalidraw", JSON.stringify(scene.elements));
+    var now = Date.now();
+    set("excalidraw", JSON.stringify((scene.elements || []).filter(function (el) {
+      return !el.isDeleted;
+    })));
     set("excalidraw-state", JSON.stringify(scene.appState || {}));
-    set("version-dataState", JSON.stringify(scene.savedAt));
-    setServerVersion(scene.savedAt);
+    set("version-dataState", JSON.stringify(now));
+    setServerVersion(now);
+    if (typeof scene.rev === "number") knownRev = scene.rev;
   };
 
   // Drop cached copies of other boards that are fully synced, to stay well
@@ -559,10 +575,13 @@
       var scene = JSON.parse(xhr.responseText);
       boardName = scene.name;
       if (scene.files && Object.keys(scene.files).length) storeFiles(scene.files);
-      if (scene.savedAt > localVersion()) {
+      if (localVersion() <= serverVersion) {
+        // nothing unsaved here: the server's copy has everything
         applyServerScene(scene);
-      } else if (serverVersion < 0) {
-        setServerVersion(scene.savedAt);
+      } else {
+        // edits made here that never reached the server: keep them; the
+        // first push merges them, and its answer brings the server's side
+        knownRev = -1;
       }
     }
   } catch (e) {
@@ -570,15 +589,58 @@
   }
   syncFiles();
 
+  // The open scene including deleted elements, when the app is up: local
+  // storage only keeps the others, and the server merges, so an element that
+  // is simply missing would never be deleted there.
+  var currentElements = function () {
+    if (window.wbGetElements) {
+      try {
+        return window.wbGetElements();
+      } catch (e) {
+        console.error("[server-sync] couldn't read the scene", e);
+      }
+    }
+    return JSON.parse(get("excalidraw") || "[]");
+  };
+
   var buildPayload = function () {
     return JSON.stringify({
       savedAt: localVersion(),
-      elements: JSON.parse(get("excalidraw") || "[]"),
+      elements: currentElements(),
       appState: JSON.parse(get("excalidraw-state") || "{}"),
     });
   };
 
+  var hasImages = function (elements) {
+    return (elements || []).some(function (el) {
+      return el.type === "image" && el.fileId && !el.isDeleted;
+    });
+  };
+
+  // Brings the server's version of the board into the open scene.
+  var applyRemote = function (scene) {
+    if (!scene || !Array.isArray(scene.elements)) return;
+    if (window.wbMergeRemote) {
+      try {
+        window.wbMergeRemote(scene.elements);
+      } catch (e) {
+        console.error("[server-sync] couldn't merge the server's changes", e);
+        return;
+      }
+      if (typeof scene.rev === "number") knownRev = Math.max(knownRev, scene.rev);
+    } else if (localVersion() <= serverVersion) {
+      // the app isn't up yet: replace the local copy, which it reads on focus
+      applyServerScene(scene);
+      window.dispatchEvent(new Event("focus"));
+    } else {
+      return; // try again on the next round
+    }
+    if (hasImages(scene.elements)) syncFiles();
+  };
+
   // 2. Push local changes. Excalidraw bumps version-dataState on every save.
+  // The server merges them and answers with the board if it has elements
+  // this tab doesn't.
   var pushing = false;
   var push = function () {
     var v = localVersion();
@@ -586,18 +648,21 @@
     pushing = true;
     fetch(API, { method: "PUT", headers: { "Content-Type": "application/json" }, body: buildPayload() })
       .then(function (res) {
-        if (apiOk(res)) {
-          setServerVersion(v);
-        } else if (res.status === 409) {
-          // another device saved something newer; take it
-          return res.json().then(function (scene) {
-            applyServerScene(scene);
-            window.dispatchEvent(new Event("focus"));
-            syncFiles();
-          });
-        } else {
+        if (!apiOk(res)) {
           console.error("[server-sync] save failed", res.redirected ? "redirected to " + res.url : res.status);
+          return;
         }
+        setServerVersion(v);
+        return res
+          .json()
+          .catch(function () {
+            return null;
+          })
+          .then(function (reply) {
+            if (!reply) return;
+            if (reply.board) applyRemote(reply.board);
+            else if (typeof reply.rev === "number" && knownRev >= 0) knownRev = Math.max(knownRev, reply.rev);
+          });
       })
       .catch(function (e) {
         console.error("[server-sync] save failed", e);
@@ -607,22 +672,28 @@
       });
   };
 
-  // 3. Pull changes made on another device, but only when there are no
-  // unpushed local edits. Excalidraw re-reads localStorage on window focus.
+  // 3. Pull changes made elsewhere (Claude, another device): a cheap check
+  // of the board's revision, then the board when it moved on.
+  var pulling = false;
   var pull = function () {
-    if (document.hidden || localVersion() > serverVersion) return;
-    fetch(API, { cache: "no-store" })
+    if (pulling || document.hidden) return;
+    pulling = true;
+    fetch(API + "/head", { cache: "no-store" })
       .then(function (res) {
-        return res.status === 200 && !res.redirected ? res.json() : null;
+        return apiOk(res) ? res.json() : null;
       })
-      .then(function (scene) {
-        if (scene && scene.savedAt > localVersion()) {
-          applyServerScene(scene);
-          window.dispatchEvent(new Event("focus"));
-          syncFiles();
-        }
+      .then(function (head) {
+        if (!head || head.rev <= knownRev) return;
+        return fetch(API, { cache: "no-store" })
+          .then(function (res) {
+            return apiOk(res) ? res.json() : null;
+          })
+          .then(applyRemote);
       })
-      .catch(function () {});
+      .catch(function () {})
+      .then(function () {
+        pulling = false;
+      });
   };
 
   var flush = function () {
@@ -636,11 +707,11 @@
 
   setInterval(function () {
     push();
+    pull();
     pushFiles();
     retryDownloadsIfDue();
   }, 2000);
   setInterval(function () {
-    pull();
     if ((waitingForServer || listFailed) && !document.hidden) syncFiles();
   }, 15000);
   document.addEventListener("visibilitychange", function () {

@@ -1,5 +1,6 @@
-// Builds the read-only render page (whiteboard-sync/render/) into
-// excalidraw-app/build/render/, served at /render/render.html.
+// Builds the connector's headless pages (whiteboard-sync/render/) into
+// excalidraw-app/build/render/: render.html (renders a board or frame) and
+// ops.html (builds Claude's edits with Excalidraw's own element code).
 // Reuses the app's aliases and plugins, minus the ones that only make sense
 // for the editor (PWA, sitemap, type checker, HTML minifier).
 //
@@ -28,7 +29,10 @@ export default (env) => {
       sourcemap: false,
       rollupOptions: {
         ...config.build.rollupOptions,
-        input: path.resolve(__dirname, "render/render.html"),
+        input: {
+          render: path.resolve(__dirname, "render/render.html"),
+          ops: path.resolve(__dirname, "render/ops.html"),
+        },
       },
     },
   };

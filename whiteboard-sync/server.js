@@ -4,7 +4,8 @@
 //   GET    /api/boards           list boards (no elements)
 //   POST   /api/boards           create a board {name, elements?, appState?, files?} -> {id}
 //   GET    /api/boards/:id       full board
-//   PUT    /api/boards/:id       save scene {savedAt, elements, appState}
+//   GET    /api/boards/:id/head  {rev, savedAt}, cheap to poll for changes
+//   PUT    /api/boards/:id       save scene {elements, appState} -> {rev, board?}
 //   PATCH  /api/boards/:id       rename {name}
 //   DELETE /api/boards/:id       move to data/trash
 //
@@ -15,17 +16,24 @@
 //   GET    /api/files/:fileId    {id, mimeType, dataURL, created}
 //   PUT    /api/files/:fileId    store {mimeType, dataURL}
 //
-// The Claude connector (read-only) lives in mcp/: /mcp, /oauth/*, /.well-known/*.
+// Saves are merged per element (scene.js), so browsers and Claude can edit a
+// board at the same time. Every save that changes something bumps the board's
+// `rev` and is logged with its author in data/journal/<id>.jsonl.
+//
+// The Claude connector lives in mcp/: /mcp, /oauth/*, /.well-known/*.
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
+
+const { mergeElements, diffElements, clientIsBehind, pruneTombstones, createJournal } = require("./scene");
 
 const PORT = Number(process.env.PORT) || 3010;
 const DATA_DIR = path.join(__dirname, "data");
 const BOARDS_DIR = path.join(DATA_DIR, "boards");
 const HISTORY_DIR = path.join(DATA_DIR, "history");
 const TRASH_DIR = path.join(DATA_DIR, "trash");
+const journal = createJournal(path.join(DATA_DIR, "journal"));
 const SNAPSHOT_INTERVAL_MS = 10 * 60 * 1000;
 const MAX_SNAPSHOTS_PER_BOARD = 200;
 const MAX_BODY = 50 * 1024 * 1024;
@@ -115,6 +123,47 @@ const readBody = (req, res, cb) => {
 };
 
 const cleanName = (name) => String(name || "").trim().slice(0, 100) || "Untitled board";
+
+const createBoard = ({ name, elements, appState, files }) => {
+  const id = newId();
+  const now = Date.now();
+  // elements/appState/files are set when importing a .excalidraw file
+  const imported = Array.isArray(elements);
+  const board = {
+    id,
+    name: cleanName(name),
+    createdAt: now,
+    savedAt: imported ? now : -1,
+    rev: 0,
+    elements: imported ? elements : [],
+    appState: (imported && appState) || {},
+    files: (imported && files) || {},
+  };
+  writeBoard(id, board);
+  return board;
+};
+
+// Merges `elements` into the board and saves it. Synchronous, so two saves
+// can't interleave. `author` is "human" (a browser) or "claude" (the connector).
+// -> { board, changes, rev } or null when the board doesn't exist
+const commit = (id, elements, author, { appState } = {}) => {
+  const board = readBoard(id);
+  if (!board) return null;
+  const merged = mergeElements(board.elements, elements);
+  const changes = diffElements(board.elements, merged);
+  const nextAppState = appState || board.appState || {};
+  const appStateChanged = appState && JSON.stringify(appState) !== JSON.stringify(board.appState || {});
+  if (!changes.length && !appStateChanged) return { board, changes, rev: board.rev || 0 };
+  const updated = { ...board, elements: changes.length ? pruneTombstones(merged) : merged, appState: nextAppState };
+  if (changes.length) {
+    updated.rev = (board.rev || 0) + 1;
+    updated.savedAt = Date.now();
+    journal.append(id, { rev: updated.rev, at: updated.savedAt, author, changes });
+  }
+  writeBoard(id, updated);
+  if (changes.length) snapshot(id, updated);
+  return { board: updated, changes, rev: updated.rev || 0 };
+};
 
 // --- Image files in GitHub ---
 
@@ -273,6 +322,9 @@ else console.warn("GITHUB_TOKEN not set: image storage (/api/files) is disabled"
 const connector = require("./mcp")({
   dataDir: DATA_DIR,
   readBoard,
+  createBoard,
+  commit,
+  journal,
   listBoardIds: () =>
     fs
       .readdirSync(BOARDS_DIR)
@@ -297,7 +349,7 @@ http
         if (!res.headersSent) send(res, 502);
       });
     }
-    const m = url.pathname.match(/^\/api\/boards(?:\/([^/]+))?$/);
+    const m = url.pathname.match(/^\/api\/boards(?:\/([^/]+)(\/head)?)?$/);
     if (!m) return send(res, 404);
     const id = m[1];
 
@@ -334,23 +386,7 @@ http
         return send(res, 200, boards);
       }
       if (req.method === "POST") {
-        return readBody(req, res, (body) => {
-          const id = newId();
-          const now = Date.now();
-          // elements/appState/files are set when importing a .excalidraw file
-          const imported = Array.isArray(body.elements);
-          const board = {
-            id,
-            name: cleanName(body.name),
-            createdAt: now,
-            savedAt: imported ? now : -1,
-            elements: imported ? body.elements : [],
-            appState: (imported && body.appState) || {},
-            files: (imported && body.files) || {},
-          };
-          writeBoard(id, board);
-          send(res, 201, { id });
-        });
+        return readBody(req, res, (body) => send(res, 201, { id: createBoard(body).id }));
       }
       return send(res, 405);
     }
@@ -359,18 +395,25 @@ http
     const board = readBoard(id);
     if (!board) return send(res, 404);
 
-    if (req.method === "GET") return send(res, 200, board);
+    if (m[2]) {
+      if (req.method !== "GET") return send(res, 405);
+      return send(res, 200, { rev: board.rev || 0, savedAt: board.savedAt });
+    }
 
-    // PUT for regular saves, POST for navigator.sendBeacon on tab close
+    if (req.method === "GET") return send(res, 200, { ...board, rev: board.rev || 0 });
+
+    // PUT for regular saves, POST for navigator.sendBeacon on tab close.
+    // Merged per element; the answer carries the board when the server has
+    // elements (e.g. Claude's) that the browser doesn't have yet.
     if (req.method === "PUT" || req.method === "POST") {
       return readBody(req, res, (scene) => {
-        if (!Array.isArray(scene.elements) || typeof scene.savedAt !== "number") return send(res, 400);
-        // Last write wins, but never let an older client state overwrite a newer one.
-        if (board.savedAt > scene.savedAt) return send(res, 409, board);
-        const updated = { ...board, savedAt: scene.savedAt, elements: scene.elements, appState: scene.appState || {} };
-        writeBoard(id, updated);
-        snapshot(id, updated);
-        send(res, 204);
+        if (!Array.isArray(scene.elements)) return send(res, 400);
+        const result = commit(id, scene.elements, "human", {
+          appState: scene.appState && typeof scene.appState === "object" ? scene.appState : undefined,
+        });
+        if (!result) return send(res, 404);
+        const behind = clientIsBehind(scene.elements, result.board.elements);
+        send(res, 200, { rev: result.rev, ...(behind ? { board: { ...result.board, rev: result.rev } } : {}) });
       });
     }
 

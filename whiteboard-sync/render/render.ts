@@ -2,12 +2,18 @@
 // Claude connector (whiteboard-sync/mcp/render.js) and handy in a browser too.
 //
 //   /render/render.html#board=<id>&frame=<elementId>&max=<px>&format=png|jpeg
+//                       &highlight=<id>,<id>  (outlines those elements)
 //
 // Loads the board and its images from /api (GET only, never saves), exports
 // the frame (or the whole board without `frame`) with this fork's
 // exportScene, shows it, and publishes the result on
 // `window.__whiteboardRender` for headless callers.
-import { getNonDeletedElements } from "@excalidraw/element";
+import { arrayToMap } from "@excalidraw/common";
+import {
+  getCommonBounds,
+  getElementBounds,
+  getNonDeletedElements,
+} from "@excalidraw/element";
 import { exportScene } from "@excalidraw/excalidraw/scene/export";
 import { restoreElements } from "@excalidraw/excalidraw/data/restore";
 
@@ -60,6 +66,51 @@ const overlaps = (a: ExcalidrawElement, b: ExcalidrawElement) =>
   a.y < b.y + b.height &&
   b.y < a.y + a.height;
 
+const HIGHLIGHT_COLOR = "#f76707";
+
+// Outlines elements on an exported image. The export maps the scene's
+// bounds (the frame's, or all elements'), plus padding, onto the image.
+const drawHighlights = async (
+  dataURL: string,
+  format: "png" | "jpeg",
+  bounds: readonly [number, number, number, number],
+  padding: number,
+  boxes: readonly (readonly [number, number, number, number])[],
+) => {
+  const img = new Image();
+  img.src = dataURL;
+  await img.decode();
+  const [minX, minY, maxX, maxY] = bounds;
+  const sx = img.naturalWidth / (maxX - minX + padding * 2 || 1);
+  const sy = img.naturalHeight / (maxY - minY + padding * 2 || 1);
+  const canvas = document.createElement("canvas");
+  canvas.width = img.naturalWidth;
+  canvas.height = img.naturalHeight;
+  const ctx = canvas.getContext("2d")!;
+  ctx.drawImage(img, 0, 0);
+  const pad = 6;
+  ctx.strokeStyle = HIGHLIGHT_COLOR;
+  ctx.lineWidth = Math.max(2, Math.round(2 * Math.min(sx, 2)));
+  ctx.setLineDash([8, 5]);
+  for (const [x1, y1, x2, y2] of boxes) {
+    const x = (x1 - minX + padding) * sx - pad;
+    const y = (y1 - minY + padding) * sy - pad;
+    const w = (x2 - x1) * sx + pad * 2;
+    const h = (y2 - y1) * sy + pad * 2;
+    ctx.beginPath();
+    if (ctx.roundRect) {
+      ctx.roundRect(x, y, w, h, 6);
+    } else {
+      ctx.rect(x, y, w, h);
+    }
+    ctx.stroke();
+  }
+  return canvas.toDataURL(
+    format === "jpeg" ? "image/jpeg" : "image/png",
+    format === "jpeg" ? 0.88 : undefined,
+  );
+};
+
 const blobToDataURL = (blob: Blob) =>
   new Promise<string>((resolve, reject) => {
     const reader = new FileReader();
@@ -82,6 +133,9 @@ const render = async (): Promise<RenderResult> => {
   const frameId = params.get("frame");
   const maxSide = Number(params.get("max")) || DEFAULT_MAX_SIDE;
   const format = params.get("format") === "jpeg" ? "jpeg" : "png";
+  const highlight = new Set(
+    (params.get("highlight") || "").split(",").filter(Boolean),
+  );
 
   if (!BOARD_ID_RE.test(boardId)) {
     throw new Error("missing or invalid #board=<id>");
@@ -153,7 +207,35 @@ const render = async (): Promise<RenderResult> => {
           config: { ...config, quality: 0.88 },
         })
       : await exportScene({ type: "png", data, config });
-  const dataURL = await blobToDataURL(blob);
+  let dataURL = await blobToDataURL(blob);
+
+  if (highlight.size) {
+    const elementsMap = arrayToMap(elements);
+    const boxes = elements
+      .filter((el) => highlight.has(el.id))
+      .map((el) => getElementBounds(el, elementsMap));
+    if (boxes.length) {
+      const bounds = frame
+        ? ([
+            frame.x,
+            frame.y,
+            frame.x + frame.width,
+            frame.y + frame.height,
+          ] as const)
+        : getCommonBounds(
+            elements.filter(
+              (el) => !el.frameId || !elements.some((f) => f.id === el.frameId),
+            ),
+          );
+      dataURL = await drawHighlights(
+        dataURL,
+        format,
+        bounds,
+        config.padding,
+        boxes,
+      );
+    }
+  }
   const { width, height } = await readImageSize(dataURL);
 
   return {
