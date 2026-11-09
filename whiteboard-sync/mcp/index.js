@@ -242,7 +242,7 @@ const imageContent = (dataURL, mimeType) => ({
 const text = (s) => ({ type: "text", text: s });
 const dataURLBytes = (dataURL) => Math.floor((dataURL.length - dataURL.indexOf(",") - 1) * 0.75);
 
-module.exports = function createConnector({ dataDir, readBoard, createBoard, commit, journal, listBoardIds, getFile }) {
+module.exports = function createConnector({ dataDir, readBoard, createBoard, commit, journal, listBoardIds, getFile, noteClaudeActivity = () => {} }) {
   const publicUrl = (process.env.PUBLIC_URL || "https://whiteboard.supa.company").replace(/\/+$/, "");
   const oauth = createOAuth({ dataDir, publicUrl, user: process.env.MCP_USER, password: process.env.MCP_PASSWORD });
   const renderer = createRenderer({
@@ -363,6 +363,8 @@ module.exports = function createConnector({ dataDir, readBoard, createBoard, com
   // runs edits ({add, update, delete}) on a board as Claude
   const edit = async (args, ops, { describeResult, frameFor }) => {
     const { board } = boards.resolveBoard(args.board);
+    // open tabs of the board say Claude is drawing there
+    noteClaudeActivity(board.id, "drawing");
     const shownFrame = args.frame ? boards.resolveFrameRef(board, args.frame) : null;
     const result = await renderer.runOps({ elements: board.elements || [], ops: ops(board) });
     if (!result.ok) throw new boards.LookupError(result.error);
@@ -371,6 +373,7 @@ module.exports = function createConnector({ dataDir, readBoard, createBoard, com
       const saved = commit(board.id, result.changed, "claude");
       if (!saved) throw new boards.LookupError("The board was deleted in the meantime.");
       if (saved.changes.length) ownRevs.add(saved.rev);
+      noteClaudeActivity(board.id, "drawing");
     }
     const look = lookAt(board.id, ownRevs);
     const frame = shownFrame || frameAround(frameFor === "before" ? board : look.board, [...result.created.map((c) => c.id), ...result.updated, ...result.deleted]);
@@ -397,6 +400,7 @@ module.exports = function createConnector({ dataDir, readBoard, createBoard, com
 
     get_frame: async ({ board, frame, include_images, max_size }, { look = true } = {}) => {
       const found = boards.getFrame(board, frame);
+      if (look) noteClaudeActivity(found.board.id, "looking");
       const render = await renderFitted({ boardId: found.board.id, frameId: found.frame && found.frame.id, max_size });
       const content = [];
       if (!render.error) content.push(imageContent(render.dataURL, render.mimeType));
@@ -415,6 +419,7 @@ module.exports = function createConnector({ dataDir, readBoard, createBoard, com
 
     get_changes: async ({ board: ref, frame: frameRef, max_size }) => {
       const { board } = boards.resolveBoard(ref);
+      noteClaudeActivity(board.id, "looking");
       const look = lookAt(board.id);
       const frame = frameRef ? boards.resolveFrameRef(look.board, frameRef) : frameAround(look.board, look.ids);
       const lines = ["", look.ids.length ? "Changed elements are outlined in orange." : "", lookText(look)];

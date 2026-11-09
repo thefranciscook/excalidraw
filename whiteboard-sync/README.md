@@ -25,6 +25,14 @@ A board can be open in several places at once: your browser tabs and devices, an
 - Each save that changes something gets the board's next `rev` and a line in `data/journal/<id>.jsonl`: `{rev, at, author, changes: [{id, type, op, version}]}`. The author is `human` for saves from the browser and `claude` for the connector. That's the board's history: who changed which element when. The 10-minute snapshots in `data/history/` are still there to restore from.
 - Deleted elements are dropped from a board a month after their deletion.
 
+## Messages on a board
+
+An open board shows messages under the toolbar (`server-sync.js`), each with a close button:
+
+- Image progress ("Loading images 3/10", "Uploading 2 images…", "Images saved") goes away on its own.
+- Warnings about images (couldn't be saved on this device, couldn't be uploaded, never reached the server) stay until they're resolved or closed. A closed warning comes back when what it says changes, for example when more images are affected. "Never reached the server" stays closed across reloads, since there's nothing to do about it on that device.
+- "Claude is drawing on this board…" (or "looking at") shows for 30 seconds after the connector last drew on or read the board. `GET /api/boards/<id>/head` says how long ago that was, in `claude: {drewAgo, lookedAgo}`. The server only remembers this in memory, for a minute.
+
 The tests (`whiteboard-sync/test/`) run with the rest of the repo's: `yarn vitest run whiteboard-sync`.
 
 ## Claude connector
