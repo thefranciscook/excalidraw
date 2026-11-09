@@ -4,7 +4,8 @@
 //   GET    /api/boards           list boards (no elements)
 //   POST   /api/boards           create a board {name, elements?, appState?, files?} -> {id}
 //   GET    /api/boards/:id       full board
-//   GET    /api/boards/:id/head  {rev, savedAt}, cheap to poll for changes
+//   GET    /api/boards/:id/head  {rev, savedAt, claude?}, cheap to poll for changes;
+//                                 claude: {drewAgo?, lookedAgo?} in ms, while Claude is at work there
 //   PUT    /api/boards/:id       save scene {elements, appState} -> {rev, board?}
 //   PATCH  /api/boards/:id       rename {name}
 //   POST   /api/boards/:id/duplicate  copy a board as "<name> (copy)" -> {id, name}
@@ -176,6 +177,31 @@ const commit = (id, elements, author, { appState } = {}) => {
   return { board: updated, changes, rev: updated.rev || 0 };
 };
 
+// When Claude (the connector) last looked at or drew on each board, so open
+// tabs can say it's at work there. In memory only: it's about the last minute.
+const CLAUDE_ACTIVE_MS = 60 * 1000;
+const claudeActivity = new Map(); // board id -> {drewAt?, lookedAt?}
+const noteClaudeActivity = (id, what) => {
+  const entry = claudeActivity.get(id) || {};
+  entry[what === "drawing" ? "drewAt" : "lookedAt"] = Date.now();
+  claudeActivity.set(id, entry);
+};
+// {drewAgo?, lookedAgo?} for the last minute, or undefined. Durations, not
+// times, so the browser's clock doesn't have to match the server's.
+const claudeActivityOf = (id) => {
+  const entry = claudeActivity.get(id);
+  if (!entry) return undefined;
+  const now = Date.now();
+  const out = {};
+  if (entry.drewAt && now - entry.drewAt < CLAUDE_ACTIVE_MS) out.drewAgo = now - entry.drewAt;
+  if (entry.lookedAt && now - entry.lookedAt < CLAUDE_ACTIVE_MS) out.lookedAgo = now - entry.lookedAt;
+  if (!Object.keys(out).length) {
+    claudeActivity.delete(id);
+    return undefined;
+  }
+  return out;
+};
+
 // --- Image files in GitHub ---
 
 const GITHUB_API = process.env.GITHUB_API || "https://api.github.com";
@@ -342,6 +368,7 @@ const connector = require("./mcp")({
       .filter((f) => f.endsWith(".json"))
       .map((f) => f.slice(0, -5)),
   getFile,
+  noteClaudeActivity,
 });
 
 http
@@ -414,7 +441,7 @@ http
 
     if (m[2]) {
       if (req.method !== "GET") return send(res, 405);
-      return send(res, 200, { rev: board.rev || 0, savedAt: board.savedAt });
+      return send(res, 200, { rev: board.rev || 0, savedAt: board.savedAt, claude: claudeActivityOf(id) });
     }
 
     if (req.method === "GET") return send(res, 200, { ...board, rev: board.rev || 0 });

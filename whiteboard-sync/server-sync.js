@@ -7,6 +7,9 @@
 // here. Their changes are picked up within a couple of seconds and merged into
 // the open scene through hooks the app sets (wbMergeRemote, wbGetElements in
 // excalidraw-app App.tsx).
+//
+// It also shows messages under the toolbar (image saving, Claude at work on
+// the board), each of which can be closed.
 (function () {
   var match = location.pathname.match(/^\/b\/([a-z0-9]{10})\/?$/);
   if (!match) {
@@ -298,60 +301,188 @@
     }).length;
   };
 
-  var statusEl = null;
+  // --- Messages ---
+  // A stack of messages under the toolbar, each with a close button.
+  // Progress ("Uploading 2 images…") goes away on its own; warnings stay
+  // until they're resolved or closed. A closed message stays closed until
+  // what it says changes (its `sig`), or it goes away and comes back.
+  var messages = {}; // key -> {text, tone: "info"|"warn"|"claude", sig}
+  var MESSAGE_ORDER = ["claude", "images-warn", "images-missing", "images-progress"];
+  // closed messages: key -> sig. Those in KEEP_CLOSED stay closed across
+  // reloads, so a warning that can't be acted on here doesn't come back on
+  // every visit (only when it changes).
+  var KEEP_CLOSED = { "images-missing": 1 };
+  var DISMISSED_KEY = "wb-dismissed:" + BOARD;
+  var dismissed = {};
+  try {
+    dismissed = JSON.parse(rawGet.call(localStorage, DISMISSED_KEY) || "{}") || {};
+  } catch (e) {}
+  var saveDismissed = function () {
+    var keep = {};
+    for (var k in dismissed) if (KEEP_CLOSED[k]) keep[k] = dismissed[k];
+    try {
+      if (Object.keys(keep).length) rawSet.call(localStorage, DISMISSED_KEY, JSON.stringify(keep));
+      else rawRemove.call(localStorage, DISMISSED_KEY);
+    } catch (e) {}
+  };
+  var setMessage = function (key, msg) {
+    if (msg) {
+      messages[key] = msg;
+      return;
+    }
+    delete messages[key];
+    // it's over: when it comes back, show it again
+    if (key in dismissed && !KEEP_CLOSED[key]) delete dismissed[key];
+  };
+
+  var boxEl = null;
+  var msgEls = {};
+  var CLOSE_ICON =
+    '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>';
+  var renderMessages = function () {
+    if (!boxEl) return;
+    MESSAGE_ORDER.forEach(function (key, i) {
+      var msg = messages[key];
+      var el = msgEls[key];
+      if (!msg || dismissed[key] === msg.sig) {
+        if (el) {
+          el.parentNode.removeChild(el);
+          delete msgEls[key];
+        }
+        return;
+      }
+      if (!el) {
+        el = document.createElement("div");
+        el.innerHTML =
+          '<span class="wb-msg-text"></span><button type="button" class="wb-msg-close" aria-label="Close" title="Close">' +
+          CLOSE_ICON +
+          "</button>";
+        el.querySelector("button").addEventListener("click", function () {
+          if (messages[key]) dismissed[key] = messages[key].sig;
+          saveDismissed();
+          renderMessages();
+        });
+        msgEls[key] = el;
+        // in MESSAGE_ORDER, without moving the others (that would drop focus)
+        var before = null;
+        for (var j = i + 1; j < MESSAGE_ORDER.length && !before; j++) before = msgEls[MESSAGE_ORDER[j]] || null;
+        boxEl.insertBefore(el, before);
+      }
+      el.className = "wb-msg wb-" + msg.tone;
+      var textEl = el.querySelector(".wb-msg-text");
+      if (textEl.textContent !== msg.text) textEl.textContent = msg.text;
+    });
+  };
+
+  // a short, stable name for a set of ids
+  var hashIds = function (ids) {
+    var h = 5381;
+    var str = ids.slice().sort().join(",");
+    for (var i = 0; i < str.length; i++) h = ((h * 33) ^ str.charCodeAt(i)) >>> 0;
+    return ids.length + ":" + h.toString(36);
+  };
+
+  // Image messages: problems saving them ("images-warn"), images nobody has
+  // ("images-missing"), and progress ("images-progress").
   var showStatus = function () {
-    if (!statusEl) return;
     var now = Date.now();
     var unsent = Object.keys(notUploaded);
     var failedUploads = unsent.filter(function (id) {
       return retryAt[id] > now;
     }).length;
     var onlyInTab = since(unstoredSince, STORE_GRACE_MS);
-    var missing = since(missingSince, MISSING_GRACE_MS);
-    var text = "";
-    var warn = true;
+    var missingIds = Object.keys(missingSince).filter(function (id) {
+      return now - missingSince[id] > MISSING_GRACE_MS;
+    });
+    var missing = missingIds.length;
+
+    var warn = null;
     if (onlyInTab) {
-      text =
-        plural(onlyInTab) +
-        " couldn't be saved on this device" +
-        (localSaveFailed ? " (its storage may be full)" : "") +
-        " and" +
-        isAre(onlyInTab) +
-        " on the server yet. Don't close this tab.";
+      warn = {
+        sig: "local:" + onlyInTab,
+        text:
+          plural(onlyInTab) +
+          " couldn't be saved on this device" +
+          (localSaveFailed ? " (its storage may be full)" : "") +
+          " and" +
+          isAre(onlyInTab) +
+          " on the server yet. Don't close this tab.",
+      };
     } else if (failedUploads) {
       // (only claim they're saved here once that's known)
-      text =
-        plural(failedUploads) +
-        " couldn't be uploaded yet. Retrying…" +
-        (Object.keys(unstoredSince).length ? " Don't close this tab." : " They're saved on this device.");
+      warn = {
+        sig: "upload:" + failedUploads,
+        text:
+          plural(failedUploads) +
+          " couldn't be uploaded yet. Retrying…" +
+          (Object.keys(unstoredSince).length ? " Don't close this tab." : " They're saved on this device."),
+      };
     } else if (listFailed && unsent.length) {
-      text = "Can't reach the server. " + plural(unsent.length) + " saved on this device only, for now. Retrying…";
-    } else if (Object.keys(downloading).length) {
-      text = "Loading images " + batchDone + "/" + Object.keys(batch).length;
-      warn = false;
-    } else if (Object.keys(downloadRetryAt).length) {
-      text = plural(Object.keys(downloadRetryAt).length) + " couldn't load. Retrying…";
-      warn = false;
-    } else if (unsent.length) {
-      text = "Uploading " + plural(unsent.length) + "…";
-      warn = false;
-    } else if (missing) {
-      text =
-        plural(missing) +
-        " on this board never reached the server and" +
-        isAre(missing) +
-        " on this device. Open the board where they were added to upload them.";
-    } else if (savedUntil > now) {
-      text = "Images saved";
-      warn = false;
+      warn = {
+        sig: "offline",
+        text: "Can't reach the server. " + plural(unsent.length) + " saved on this device only, for now. Retrying…",
+      };
     }
+    if (warn) warn.tone = "warn";
+    setMessage("images-warn", warn);
+
+    setMessage(
+      "images-missing",
+      missing
+        ? {
+            tone: "warn",
+            sig: hashIds(missingIds),
+            text:
+              plural(missing) +
+              " on this board never reached the server and" +
+              isAre(missing) +
+              " on this device. Open the board where " +
+              (missing === 1 ? "it was added to upload it." : "they were added to upload them."),
+          }
+        : null,
+    );
+
+    var progress = null;
+    if (Object.keys(downloading).length) {
+      progress = { sig: "loading", text: "Loading images " + batchDone + "/" + Object.keys(batch).length };
+    } else if (Object.keys(downloadRetryAt).length) {
+      progress = { sig: "download-retry", text: plural(Object.keys(downloadRetryAt).length) + " couldn't load. Retrying…" };
+    } else if (unsent.length && !warn) {
+      progress = { sig: "uploading", text: "Uploading " + plural(unsent.length) + "…" };
+    } else if (savedUntil > now) {
+      progress = { sig: "saved", text: "Images saved" };
+    }
+    if (progress) progress.tone = "info";
+    setMessage("images-progress", progress);
+
     if (!Object.keys(downloading).length) {
       batch = {};
       batchDone = 0;
     }
-    statusEl.textContent = text;
-    statusEl.className = warn ? "wb-warn" : "";
-    statusEl.style.display = text ? "" : "none";
+    renderMessages();
+  };
+
+  // "Claude is drawing on this board": the server says how long ago Claude
+  // (the connector) last drew on or looked at it (GET .../head).
+  var CLAUDE_SHOW_MS = 30000;
+  var claudeDrewAt = 0;
+  var claudeLookedAt = 0;
+  var showClaude = function () {
+    var now = Date.now();
+    var text =
+      now - claudeDrewAt < CLAUDE_SHOW_MS
+        ? "Claude is drawing on this board…"
+        : now - claudeLookedAt < CLAUDE_SHOW_MS
+          ? "Claude is looking at this board…"
+          : "";
+    setMessage("claude", text ? { tone: "claude", sig: "active", text: text } : null);
+    renderMessages();
+  };
+  var noteClaude = function (claude) {
+    var now = Date.now();
+    if (claude && typeof claude.drewAgo === "number") claudeDrewAt = Math.max(claudeDrewAt, now - claude.drewAgo);
+    if (claude && typeof claude.lookedAgo === "number") claudeLookedAt = Math.max(claudeLookedAt, now - claude.lookedAgo);
+    showClaude();
   };
 
   var download = function (id, next) {
@@ -683,6 +814,7 @@
         return apiOk(res) ? res.json() : null;
       })
       .then(function (head) {
+        if (head) noteClaude(head.claude);
         if (!head || head.rev <= knownRev) return;
         return fetch(API, { cache: "no-store" })
           .then(function (res) {
@@ -710,6 +842,7 @@
     pull();
     pushFiles();
     retryDownloadsIfDue();
+    showClaude();
   }, 2000);
   setInterval(function () {
     if ((waitingForServer || listFailed) && !document.hidden) syncFiles();
@@ -741,13 +874,26 @@
       "#wb-back:hover{background:#e0dfff}" +
       ".excalidraw.theme--dark ~ #wb-back,html.wb-dark #wb-back{background:#232329;color:#e3e3e8;box-shadow:0 0 0 1px #2e2d39}" +
       "@media (max-width:730px){#wb-back{top:auto;bottom:72px;left:12px}}" +
-      "#wb-status{position:fixed;z-index:10;top:72px;left:50%;transform:translateX(-50%);padding:6px 12px;" +
-      "border-radius:8px;font:500 13px/1.2 system-ui,sans-serif;white-space:nowrap;pointer-events:none;" +
-      "background:#ececf4;color:#1b1b1f;box-shadow:0 0 0 1px #e0e0ea}" +
-      "html.wb-dark #wb-status{background:#232329;color:#e3e3e8;box-shadow:0 0 0 1px #2e2d39}" +
-      "#wb-status.wb-warn{background:#fff4d6;color:#5c3d00;box-shadow:0 0 0 1px #f0c24b;white-space:normal;max-width:min(90vw,520px);text-align:center}" +
-      "html.wb-dark #wb-status.wb-warn{background:#3d2f0d;color:#ffe2a0;box-shadow:0 0 0 1px #7a5c14}" +
-      "@media (max-width:730px){#wb-status{top:24px}}";
+      "#wb-messages{position:fixed;z-index:10;top:72px;left:50%;transform:translateX(-50%);display:flex;" +
+      "flex-direction:column;align-items:center;gap:8px;width:max-content;max-width:min(92vw,560px);pointer-events:none}" +
+      ".wb-msg{pointer-events:auto;display:flex;align-items:center;gap:8px;padding:5px 5px 5px 12px;border-radius:8px;" +
+      "font:500 13px/1.3 system-ui,sans-serif;background:#ececf4;color:#1b1b1f;box-shadow:0 0 0 1px #e0e0ea}" +
+      "html.wb-dark .wb-msg{background:#232329;color:#e3e3e8;box-shadow:0 0 0 1px #2e2d39}" +
+      ".wb-msg.wb-warn{background:#fff4d6;color:#5c3d00;box-shadow:0 0 0 1px #f0c24b}" +
+      "html.wb-dark .wb-msg.wb-warn{background:#3d2f0d;color:#ffe2a0;box-shadow:0 0 0 1px #7a5c14}" +
+      ".wb-msg.wb-claude{background:#e0dfff;color:#2b2a6b;box-shadow:0 0 0 1px #c3c1ff}" +
+      "html.wb-dark .wb-msg.wb-claude{background:#2e2c5a;color:#e0dfff;box-shadow:0 0 0 1px #4a47a3}" +
+      ".wb-msg.wb-claude::before{content:'';flex:none;width:8px;height:8px;border-radius:50%;background:currentColor;" +
+      "animation:wb-pulse 1.4s ease-in-out infinite}" +
+      "@keyframes wb-pulse{50%{opacity:.25}}" +
+      "@media (prefers-reduced-motion:reduce){.wb-msg.wb-claude::before{animation:none}}" +
+      ".wb-msg-text{flex:1;min-width:0}" +
+      ".wb-msg-close{flex:none;display:grid;place-items:center;width:24px;height:24px;padding:0;border:0;border-radius:6px;" +
+      "background:transparent;color:inherit;opacity:.6;cursor:pointer}" +
+      ".wb-msg-close:hover{opacity:1;background:rgba(0,0,0,.08)}" +
+      "html.wb-dark .wb-msg-close:hover{background:rgba(255,255,255,.1)}" +
+      ".wb-msg-close:focus-visible{opacity:1;outline:2px solid currentColor;outline-offset:1px}" +
+      "@media (max-width:730px){#wb-messages{top:24px}}";
     document.head.appendChild(style);
     var a = document.createElement("a");
     a.id = "wb-back";
@@ -758,10 +904,10 @@
       "<span></span>";
     a.querySelector("span").textContent = boardName || "Boards";
     document.body.appendChild(a);
-    statusEl = document.createElement("div");
-    statusEl.id = "wb-status";
-    statusEl.setAttribute("role", "status");
-    document.body.appendChild(statusEl);
+    boxEl = document.createElement("div");
+    boxEl.id = "wb-messages";
+    boxEl.setAttribute("role", "status");
+    document.body.appendChild(boxEl);
     showStatus();
     // follow Excalidraw's theme
     var sync = function () {
