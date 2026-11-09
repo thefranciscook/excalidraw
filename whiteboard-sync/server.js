@@ -7,6 +7,7 @@
 //   GET    /api/boards/:id/head  {rev, savedAt}, cheap to poll for changes
 //   PUT    /api/boards/:id       save scene {elements, appState} -> {rev, board?}
 //   PATCH  /api/boards/:id       rename {name}
+//   POST   /api/boards/:id/duplicate  copy a board as "<name> (copy)" -> {id, name}
 //   DELETE /api/boards/:id       move to data/trash
 //
 // Image files are kept in a private GitHub repo (files/<fileId>.<ext>), not on
@@ -142,6 +143,16 @@ const createBoard = ({ name, elements, appState, files }) => {
   writeBoard(id, board);
   return board;
 };
+
+// A new board with a copy of `board`'s scene. Deleted elements stay behind,
+// and the copy starts its own rev and journal. Images are shared by file id.
+const duplicateBoard = (board) =>
+  createBoard({
+    name: `${board.name} (copy)`,
+    elements: (board.elements || []).filter((e) => !e.isDeleted),
+    appState: board.appState || {},
+    files: board.files || {},
+  });
 
 // Merges `elements` into the board and saves it. Synchronous, so two saves
 // can't interleave. `author` is "human" (a browser) or "claude" (the connector).
@@ -349,7 +360,7 @@ http
         if (!res.headersSent) send(res, 502);
       });
     }
-    const m = url.pathname.match(/^\/api\/boards(?:\/([^/]+)(\/head)?)?$/);
+    const m = url.pathname.match(/^\/api\/boards(?:\/([^/]+)(\/head|\/duplicate)?)?$/);
     if (!m) return send(res, 404);
     const id = m[1];
 
@@ -394,6 +405,12 @@ http
     if (!ID_RE.test(id)) return send(res, 404);
     const board = readBoard(id);
     if (!board) return send(res, 404);
+
+    if (m[2] === "/duplicate") {
+      if (req.method !== "POST") return send(res, 405);
+      const copy = duplicateBoard(board);
+      return send(res, 201, { id: copy.id, name: copy.name });
+    }
 
     if (m[2]) {
       if (req.method !== "GET") return send(res, 405);
