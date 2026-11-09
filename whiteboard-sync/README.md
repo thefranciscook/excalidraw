@@ -35,6 +35,43 @@ An open board shows messages under the toolbar (`server-sync.js`), each with a c
 
 The tests (`whiteboard-sync/test/`) run with the rest of the repo's: `yarn vitest run whiteboard-sync`.
 
+## Sharing a board by link (view only)
+
+The **Share** button at the top right of a board (or "Share view-only link" in the menu, on phones) makes a link anyone can open without logging in: `https://whiteboard.supa.company/s/<token>`. People with the link can pan, zoom and follow links, and they see your changes within about 10 seconds. They can't edit, export or save the board, and the link doesn't open any other board or image.
+
+- **Links can't be guessed.** The token is 24 random bytes (192 bits), unrelated to the board's id or name. The viewer never learns the board's id. Images are only served if they're on that board.
+- **Links expire**, after 30 days unless you pick 1 day, 7 days, 90 days or 1 year when you make one. You can turn a link off early in the same dialog. A board can have several links, each with its own expiry.
+- **When a link has expired or was turned off**, the page says so and asks the person to contact you for a new one. Set who they should contact with `SHARE_CONTACT` in the server's environment, e.g. `SHARE_CONTACT=Szilard (you@example.com)`. An email address in it becomes a mailto link. Without it, the page says to ask the person who shared the link.
+- Links are kept in `data/shares.json`. Expired and turned-off links are forgotten 6 months after they ended (after that, the page just says the link doesn't work).
+
+The viewer page is `render/view.html`, built with the render pages by `rebuild.sh`. `server.js` serves it at `/s/<token>`, and the board's data at `/api/shared/<token>`.
+
+### Server setup (once)
+
+Let the share paths past the site login in Caddy, next to the connector's (`/render/*` holds the viewer's scripts and fonts; the render pages there only read through `/api`, which stays behind the login):
+
+```
+whiteboard.supa.company {
+	@claude path /mcp /oauth/* /.well-known/oauth-authorization-server /.well-known/oauth-protected-resource /.well-known/oauth-protected-resource/* /.well-known/openid-configuration
+	handle @claude {
+		reverse_proxy 127.0.0.1:3010
+	}
+	@shared path /s/* /api/shared/*
+	handle @shared {
+		reverse_proxy 127.0.0.1:3010
+	}
+	handle /render/* {
+		root * /var/www/excalidraw
+		file_server
+	}
+	handle {
+		# the existing login, /api proxy and file_server go here, unchanged
+	}
+}
+```
+
+Then run `rebuild.sh`, add `SHARE_CONTACT` to the environment, and restart `server.js`. To check it: `curl -i https://whiteboard.supa.company/api/shared/x` (in a private window, or without your login cookie) should answer 404 with JSON, not the login page.
+
 ## Claude connector
 
 `mcp/` adds a connector, so Claude can look at your boards and draw on them in claude.ai, the Claude desktop and mobile apps, and Claude Code. Paste a frame link (right-click the frame, then "Copy link to object"), or name it: "use the Hero frame on the Inspiration board", or "draw our login flow on a new board".
@@ -114,6 +151,7 @@ Without Playwright or the render page, `get_frame` still works, but it sends the
   ```
 
   Then run `/mcp` in Claude Code to log in.
+
 - **ChatGPT** (developer mode): Settings, Apps, Create app. Enter `https://whiteboard.supa.company/mcp` as the server URL, choose OAuth, and log in with `MCP_USER`/`MCP_PASSWORD`. The login only sends you back to Claude, ChatGPT (`chatgpt.com`, `openai.com`) or loopback addresses.
 
 Tokens last an hour and refresh automatically for 90 days. To log every client out, delete `data/oauth.json` and restart `server.js`.

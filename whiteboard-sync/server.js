@@ -1,5 +1,6 @@
 // Tiny storage backend for the self-hosted Excalidraw at whiteboard.supa.company.
-// Stores each board as JSON and keeps periodic snapshots. Auth is handled by Caddy.
+// Stores each board as JSON and keeps periodic snapshots. Auth is handled by Caddy,
+// except for view-only share links (/s/*, /api/shared/*), which are public.
 //
 //   GET    /api/boards           list boards (no elements)
 //   POST   /api/boards           create a board {name, elements?, appState?, files?} -> {id}
@@ -10,6 +11,20 @@
 //   PATCH  /api/boards/:id       rename {name}
 //   POST   /api/boards/:id/duplicate  copy a board as "<name> (copy)" -> {id, name}
 //   DELETE /api/boards/:id       move to data/trash
+//
+// View-only share links (shares.js). Managing them is behind the site login:
+//
+//   GET    /api/boards/:id/shares         {shares: [{token, createdAt, expiresAt, expired}], contact, defaultDays, maxDays}
+//   POST   /api/boards/:id/shares         new link {days?} (default 30) -> {token, createdAt, expiresAt}
+//   DELETE /api/boards/:id/shares/:token  turn a link off
+//
+// Opening them is public (Caddy lets /s/* and /api/shared/* past its login):
+//
+//   GET    /s/:token                      the viewer page (render/view.html)
+//   GET    /api/shared/:token             {name, elements, appState, rev, expiresAt}; deleted elements left out.
+//                                         410 {status: "expired"|"revoked"|"missing", contact} when it's over
+//   GET    /api/shared/:token/head        {rev}, to poll for changes
+//   GET    /api/shared/:token/files/:fileId  an image, only if the board shows it
 //
 // Image files are kept in a private GitHub repo (files/<fileId>.<ext>), not on
 // this disk. Needs GITHUB_TOKEN (fine-grained PAT, Contents read/write on that repo).
@@ -29,6 +44,7 @@ const path = require("path");
 const crypto = require("crypto");
 
 const { mergeElements, diffElements, clientIsBehind, pruneTombstones, createJournal } = require("./scene");
+const { createShares } = require("./shares");
 
 const PORT = Number(process.env.PORT) || 3010;
 const DATA_DIR = path.join(__dirname, "data");
@@ -36,6 +52,9 @@ const BOARDS_DIR = path.join(DATA_DIR, "boards");
 const HISTORY_DIR = path.join(DATA_DIR, "history");
 const TRASH_DIR = path.join(DATA_DIR, "trash");
 const journal = createJournal(path.join(DATA_DIR, "journal"));
+const RENDER_DIR = path.resolve(process.env.WHITEBOARD_RENDER_DIR || "/var/www/excalidraw/render");
+// who people whose link expired should ask for a new one, e.g. "Szilard (me@example.com)"
+const SHARE_CONTACT = String(process.env.SHARE_CONTACT || "").trim().slice(0, 200);
 const SNAPSHOT_INTERVAL_MS = 10 * 60 * 1000;
 const MAX_SNAPSHOTS_PER_BOARD = 200;
 const MAX_BODY = 50 * 1024 * 1024;
@@ -44,6 +63,7 @@ const ID_RE = /^[a-z0-9]{10}$/;
 for (const dir of [BOARDS_DIR, HISTORY_DIR, TRASH_DIR]) {
   fs.mkdirSync(dir, { recursive: true });
 }
+const shares = createShares(path.join(DATA_DIR, "shares.json"));
 
 const boardFile = (id) => path.join(BOARDS_DIR, id + ".json");
 
@@ -354,6 +374,68 @@ const handleFiles = async (req, res, id) => {
 if (GITHUB_TOKEN) loadIndex();
 else console.warn("GITHUB_TOKEN not set: image storage (/api/files) is disabled");
 
+// --- View-only share links, open to anyone with the link ---
+
+// Not for search engines, and the link isn't passed on to sites the board links to.
+const PUBLIC_HEADERS = { "X-Robots-Tag": "noindex, nofollow", "Referrer-Policy": "no-referrer" };
+
+const sendPublic = (res, status, body, cache = "no-store") => {
+  res.writeHead(status, { ...PUBLIC_HEADERS, "Content-Type": "application/json", "Cache-Control": cache });
+  res.end(JSON.stringify(body));
+};
+
+// the viewer page; it reads the token from the address and loads the board itself
+const handleSharePage = (req, res, token) => {
+  if (req.method !== "GET" && req.method !== "HEAD") return send(res, 405);
+  let html;
+  try {
+    html = fs.readFileSync(path.join(RENDER_DIR, "view.html"));
+  } catch {
+    console.error(`share page: ${path.join(RENDER_DIR, "view.html")} is missing (run rebuild.sh)`);
+    res.writeHead(503, { "Content-Type": "text/plain; charset=utf-8" });
+    return res.end("The board viewer isn't installed on this server yet.");
+  }
+  res.writeHead(shares.TOKEN_RE.test(token) ? 200 : 404, {
+    ...PUBLIC_HEADERS,
+    "Content-Type": "text/html; charset=utf-8",
+    "Cache-Control": "no-cache",
+  });
+  res.end(req.method === "HEAD" ? undefined : html);
+};
+
+const showsFile = (board, fileId) =>
+  (board.elements || []).some((e) => !e.isDeleted && e.type === "image" && e.fileId === fileId);
+
+const handleShared = async (req, res, token, sub, fileId) => {
+  if (req.method !== "GET") return sendPublic(res, 405, { status: "error" });
+  const share = shares.resolve(token);
+  const contact = SHARE_CONTACT || undefined;
+  if (share.status === "unknown") return sendPublic(res, 404, { status: "unknown", contact });
+  if (share.status !== "ok") return sendPublic(res, 410, { status: share.status, expiresAt: share.expiresAt, contact });
+  const board = readBoard(share.boardId);
+  if (!board) return sendPublic(res, 410, { status: "missing", contact });
+
+  if (sub === "head") return sendPublic(res, 200, { rev: board.rev || 0 });
+
+  if (sub === "files") {
+    // only images on the board: a link to one board doesn't open the others' images
+    if (!FILE_ID_RE.test(fileId) || !showsFile(board, fileId)) return sendPublic(res, 404, { status: "error" });
+    const inline = board.files && Object.hasOwn(board.files, fileId) && board.files[fileId];
+    const file = inline && inline.dataURL ? inline : await getFile(fileId);
+    if (!file) return sendPublic(res, 404, { status: "error" });
+    const { id, mimeType, dataURL, created } = file;
+    return sendPublic(res, 200, { id, mimeType, dataURL, created }, "private, max-age=86400");
+  }
+
+  sendPublic(res, 200, {
+    name: board.name,
+    elements: (board.elements || []).filter((e) => !e.isDeleted),
+    appState: { viewBackgroundColor: (board.appState || {}).viewBackgroundColor },
+    rev: board.rev || 0,
+    expiresAt: share.expiresAt,
+  });
+};
+
 // Claude connector (remote MCP server + its OAuth login). Caddy exposes these
 // paths without its own login; they check their own bearer tokens.
 const connector = require("./mcp")({
@@ -380,6 +462,15 @@ http
         if (!res.headersSent) send(res, 500);
       });
     }
+    const page = url.pathname.match(/^\/s\/([^/]+)\/?$/);
+    if (page) return handleSharePage(req, res, page[1]);
+    const shared = url.pathname.match(/^\/api\/shared\/([^/]+)(?:\/(head)|\/(files)\/([^/]+))?$/);
+    if (shared) {
+      return handleShared(req, res, shared[1], shared[2] || shared[3], shared[4]).catch((e) => {
+        console.error("shared board request failed:", e.message);
+        if (!res.headersSent) sendPublic(res, 502, { status: "error" });
+      });
+    }
     const f = url.pathname.match(/^\/api\/files(?:\/([^/]+))?$/);
     if (f) {
       return handleFiles(req, res, f[1]).catch((e) => {
@@ -387,7 +478,7 @@ http
         if (!res.headersSent) send(res, 502);
       });
     }
-    const m = url.pathname.match(/^\/api\/boards(?:\/([^/]+)(\/head|\/duplicate)?)?$/);
+    const m = url.pathname.match(/^\/api\/boards(?:\/([^/]+)(\/head|\/duplicate|\/shares(?:\/([^/]+))?)?)?$/);
     if (!m) return send(res, 404);
     const id = m[1];
 
@@ -437,6 +528,24 @@ http
       if (req.method !== "POST") return send(res, 405);
       const copy = duplicateBoard(board);
       return send(res, 201, { id: copy.id, name: copy.name });
+    }
+
+    if (m[2] && m[2].startsWith("/shares")) {
+      const token = m[3];
+      if (token) {
+        if (req.method !== "DELETE") return send(res, 405);
+        return send(res, shares.revoke(id, token) ? 204 : 404);
+      }
+      if (req.method === "GET") {
+        return send(res, 200, {
+          shares: shares.list(id),
+          contact: SHARE_CONTACT || null,
+          defaultDays: shares.DEFAULT_DAYS,
+          maxDays: shares.MAX_DAYS,
+        });
+      }
+      if (req.method === "POST") return readBody(req, res, (body) => send(res, 201, shares.create(id, body && body.days)));
+      return send(res, 405);
     }
 
     if (m[2]) {
