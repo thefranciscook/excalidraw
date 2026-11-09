@@ -2,6 +2,7 @@ import {
   loginIcon,
   ExcalLogo,
   eyeIcon,
+  share,
 } from "@excalidraw/excalidraw/components/icons";
 import { useI18n } from "@excalidraw/excalidraw/i18n";
 import { MainMenu } from "@excalidraw/excalidraw/index";
@@ -20,6 +21,8 @@ export const AppMainMenu: React.FC<{
   onCollabDialogOpen: () => any;
   isCollaborating: boolean;
   isCollabEnabled: boolean;
+  /** opens the view-only link dialog, on a self-hosted board (/b/<id>) */
+  onShareViewLink?: () => void;
   theme: Theme | "system";
   refresh: () => void;
 }> = React.memo((props) => {
@@ -35,6 +38,11 @@ export const AppMainMenu: React.FC<{
           isCollaborating={props.isCollaborating}
           onSelect={() => props.onCollabDialogOpen()}
         />
+      )}
+      {props.onShareViewLink && (
+        <MainMenu.Item icon={share} onSelect={props.onShareViewLink}>
+          Share view-only link
+        </MainMenu.Item>
       )}
       <MainMenu.DefaultItems.CommandPalette className="highlighted" />
       <MainMenu.DefaultItems.SearchMenu />

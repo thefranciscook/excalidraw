@@ -1,0 +1,138 @@
+.share-view-link-button {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  height: var(--lg-button-size);
+  box-sizing: border-box;
+  padding: 0 0.875rem 0 0.75rem;
+  border: none;
+  border-radius: var(--border-radius-lg);
+  background-color: var(--color-primary);
+  color: var(--color-surface-lowest, #fff);
+  font-family: var(--ui-font);
+  font-size: 0.875rem;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+
+  &:hover {
+    background-color: var(--color-primary-darker);
+  }
+
+  &:active {
+    background-color: var(--color-primary-darkest);
+  }
+
+  svg {
+    width: 1rem;
+    height: 1rem;
+  }
+}
+
+.excalidraw .ShareViewLink {
+  .Dialog__content {
+    display: flex;
+    flex-direction: column;
+    gap: 1.25rem;
+  }
+
+  h3 {
+    margin: 0 0 0.5rem;
+    font-size: 1rem;
+  }
+
+  p {
+    margin: 0;
+    line-height: 1.5;
+  }
+
+  code {
+    font-family: var(--font-family-code, monospace);
+    font-size: 0.875em;
+  }
+
+  select {
+    margin-left: 0.25rem;
+    padding: 0.375rem 0.5rem;
+    border: 1px solid var(--default-border-color);
+    border-radius: var(--border-radius-md);
+    background: var(--input-bg-color);
+    color: var(--text-primary-color);
+    font: inherit;
+  }
+
+  &__copyRow,
+  &__create {
+    display: flex;
+    align-items: flex-end;
+    gap: 0.5rem;
+  }
+
+  &__create {
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+  }
+
+  &__list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+
+    li {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.75rem;
+      padding: 0.375rem 0;
+      border-bottom: 1px solid var(--default-border-color);
+    }
+
+    button {
+      border: none;
+      background: none;
+      padding: 0.25rem 0.5rem;
+      border-radius: var(--border-radius-md);
+      color: var(--color-primary);
+      font: inherit;
+      font-size: 0.875rem;
+      cursor: pointer;
+
+      &:hover {
+        background: var(--button-hover-bg);
+      }
+
+      &.ShareViewLink__danger {
+        color: var(--color-danger, #d43c3c);
+      }
+    }
+  }
+
+  &__linkMeta {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    font-size: 0.875rem;
+  }
+
+  &__linkActions {
+    display: flex;
+    flex-shrink: 0;
+  }
+
+  &__expired {
+    color: var(--color-gray-50, #888);
+  }
+
+  &__error {
+    color: var(--color-danger, #d43c3c);
+  }
+
+  &__note {
+    font-size: 0.875rem;
+    color: var(--color-gray-50, #888);
+  }
+}

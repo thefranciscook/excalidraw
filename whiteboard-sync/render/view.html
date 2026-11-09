@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, shrink-to-fit=no, user-scalable=no"
+    />
+    <meta name="robots" content="noindex, nofollow" />
+    <meta name="referrer" content="no-referrer" />
+    <title>Shared board</title>
+    <link rel="icon" href="data:," />
+    <script>
+      // fonts are emitted under /render/fonts/..., resolved against the origin
+      window.EXCALIDRAW_ASSET_PATH = window.origin;
+    </script>
+    <style>
+      :root {
+        --wbv-bg: #ffffff;
+        --wbv-text: #1b1b1f;
+        --wbv-muted: #6b6b76;
+        --wbv-accent: #6965db;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --wbv-bg: #121214;
+          --wbv-text: #e3e3e8;
+          --wbv-muted: #9a9aa6;
+          --wbv-accent: #a8a5ff;
+        }
+      }
+      html,
+      body,
+      #root {
+        margin: 0;
+        height: 100%;
+        background: var(--wbv-bg);
+        color: var(--wbv-text);
+        font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+      }
+      .wbv-status {
+        box-sizing: border-box;
+        min-height: 100%;
+        display: grid;
+        place-items: center;
+        padding: 24px 16px;
+        text-align: center;
+      }
+      .wbv-status__box {
+        max-width: 440px;
+      }
+      .wbv-status h1 {
+        font-size: 22px;
+        margin: 0 0 8px;
+      }
+      .wbv-status p {
+        margin: 0 0 8px;
+        color: var(--wbv-muted);
+      }
+      .wbv-status a {
+        color: var(--wbv-accent);
+        font-weight: 600;
+      }
+      .wbv-badge {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        max-width: 40vw;
+        height: var(--lg-button-size, 2.5rem);
+        box-sizing: border-box;
+        padding: 0 12px;
+        border-radius: var(--border-radius-lg, 8px);
+        background: var(--island-bg-color, #fff);
+        box-shadow: var(--shadow-island, none);
+        color: var(--text-primary-color, inherit);
+        font-family: var(--ui-font, inherit);
+        font-size: 0.875rem;
+        white-space: nowrap;
+      }
+      .wbv-badge__name {
+        font-weight: 600;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .wbv-badge__mode {
+        color: var(--color-gray-50, #888);
+        flex-shrink: 0;
+      }
+    </style>
+  </head>
+  <body>
+    <noscript>This board needs JavaScript to show.</noscript>
+    <div id="root"><div class="wbv-status">Loading the board…</div></div>
+    <script type="module" src="./view.tsx"></script>
+  </body>
+</html>

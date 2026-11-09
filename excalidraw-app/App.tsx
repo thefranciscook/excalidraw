@@ -148,6 +148,11 @@ import "./index.scss";
 
 import { AppSidebar } from "./components/AppSidebar";
 import { ClaudeConnectorBanner } from "./components/ClaudeConnectorBanner";
+import {
+  getBoardId,
+  ShareViewLinkButton,
+  ShareViewLinkDialog,
+} from "./components/ShareViewLink";
 
 import type { CollabAPI } from "./collab/Collab";
 
@@ -882,6 +887,11 @@ const ExcalidrawWrapper = () => {
 
   const localStorageQuotaExceeded = useAtomValue(localStorageQuotaExceededAtom);
 
+  // the self-hosted board open in this tab (/b/<id>), which can be shared by link
+  const [boardId] = useState(getBoardId);
+  const [isShareViewLinkOpen, setIsShareViewLinkOpen] = useState(false);
+  const openShareViewLink = useCallback(() => setIsShareViewLinkOpen(true), []);
+
   const onCollabDialogOpen = useCallback(
     () => setShareDialogState({ isOpen: true, type: "collaborationOnly" }),
     [setShareDialogState],
@@ -1057,13 +1067,14 @@ const ExcalidrawWrapper = () => {
           const showConnectorBanner =
             excalidrawAPI?.getEditorInterface().formFactor === "desktop";
           const showCollab = !!collabAPI && isCollabAvailable;
-          if (!showConnectorBanner && !showCollab) {
+          if (!showConnectorBanner && !showCollab && !boardId) {
             return null;
           }
 
           return (
             <div className="excalidraw-ui-top-right">
               {showConnectorBanner && <ClaudeConnectorBanner />}
+              {boardId && <ShareViewLinkButton onClick={openShareViewLink} />}
               {showCollab && collabError.message && (
                 <CollabError collabError={collabError} />
               )}
@@ -1094,6 +1105,7 @@ const ExcalidrawWrapper = () => {
           onCollabDialogOpen={onCollabDialogOpen}
           isCollaborating={isCollaborating}
           isCollabEnabled={isCollabAvailable}
+          onShareViewLink={boardId ? openShareViewLink : undefined}
           theme={appTheme}
           refresh={() => forceRefresh((prev) => !prev)}
         />
@@ -1146,6 +1158,12 @@ const ExcalidrawWrapper = () => {
           <Collab excalidrawAPI={excalidrawAPI} />
         )}
 
+        {boardId && isShareViewLinkOpen && (
+          <ShareViewLinkDialog
+            boardId={boardId}
+            onClose={() => setIsShareViewLinkOpen(false)}
+          />
+        )}
         <ShareDialog
           collabAPI={collabAPI}
           onExportToBackend={async () => {
