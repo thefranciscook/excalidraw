@@ -24,7 +24,7 @@
 //   GET    /api/shared/:token             {name, elements, appState: {viewBackgroundColor, theme}, rev, expiresAt};
 //                                         deleted elements left out.
 //                                         410 {status: "expired"|"revoked"|"missing", contact} when it's over
-//   GET    /api/shared/:token/head        {rev}, to poll for changes
+//   GET    /api/shared/:token/head        {rev, theme}, to poll for changes
 //   GET    /api/shared/:token/files/:fileId  an image, only if the board shows it
 //
 // Image files are kept in a private GitHub repo (files/<fileId>.<ext>), not on
@@ -416,7 +416,9 @@ const handleShared = async (req, res, token, sub, fileId) => {
   const board = readBoard(share.boardId);
   if (!board) return sendPublic(res, 410, { status: "missing", contact });
 
-  if (sub === "head") return sendPublic(res, 200, { rev: board.rev || 0 });
+  // the theme too: switching it doesn't change the board's rev
+  const theme = (board.appState || {}).theme === "dark" ? "dark" : "light";
+  if (sub === "head") return sendPublic(res, 200, { rev: board.rev || 0, theme });
 
   if (sub === "files") {
     // only images on the board: a link to one board doesn't open the others' images
@@ -434,7 +436,7 @@ const handleShared = async (req, res, token, sub, fileId) => {
     // the theme it was last edited in, so viewers see it as its owner does
     appState: {
       viewBackgroundColor: (board.appState || {}).viewBackgroundColor,
-      theme: (board.appState || {}).theme === "dark" ? "dark" : "light",
+      theme,
     },
     rev: board.rev || 0,
     expiresAt: share.expiresAt,

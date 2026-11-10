@@ -16,6 +16,7 @@ import {
 } from "@excalidraw/element";
 import { exportScene } from "@excalidraw/excalidraw/scene/export";
 import { restoreElements } from "@excalidraw/excalidraw/data/restore";
+import { setGoogleFontsConfig } from "@excalidraw/excalidraw/fonts/GoogleFonts";
 
 import type {
   ExcalidrawElement,
@@ -41,6 +42,14 @@ declare global {
     __whiteboardRender?: RenderResult;
   }
 }
+
+// Boards can use Google Fonts, which the editor turns on (excalidraw-app
+// App.tsx); without this, that text falls back to a default font.
+setGoogleFontsConfig({
+  cssBaseUrl:
+    import.meta.env.VITE_APP_GOOGLE_FONTS_CSS_URL ||
+    "https://fonts.googleapis.com",
+});
 
 const BOARD_ID_RE = /^[a-z0-9]{10}$/;
 const DEFAULT_MAX_SIDE = 2400;

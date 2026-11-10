@@ -25,6 +25,7 @@ import {
 } from "@excalidraw/element";
 import { DEFAULT_FONT_FAMILY, randomId } from "@excalidraw/common";
 import { restoreElements } from "@excalidraw/excalidraw/data/restore";
+import { setGoogleFontsConfig } from "@excalidraw/excalidraw/fonts/GoogleFonts";
 import { Fonts } from "@excalidraw/excalidraw/fonts";
 
 import type { ExcalidrawElementSkeleton } from "@excalidraw/element";
@@ -65,6 +66,14 @@ declare global {
 }
 
 class OpsError extends Error {}
+
+// Boards can use Google Fonts, which the editor turns on (excalidraw-app
+// App.tsx); without this, that text falls back to a default font.
+setGoogleFontsConfig({
+  cssBaseUrl:
+    import.meta.env.VITE_APP_GOOGLE_FONTS_CSS_URL ||
+    "https://fonts.googleapis.com",
+});
 
 // props Claude may set with update_elements, by what they apply to
 const STYLE_PROPS = [

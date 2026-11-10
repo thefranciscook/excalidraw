@@ -35,6 +35,14 @@ type Ended = {
   contact?: string;
 };
 
+// Boards can use Google Fonts (the editor turns them on in excalidraw-app
+// App.tsx): without the same setting, that text falls back to a default font.
+const GOOGLE_FONTS = {
+  cssBaseUrl:
+    import.meta.env.VITE_APP_GOOGLE_FONTS_CSS_URL ||
+    "https://fonts.googleapis.com",
+};
+
 const POLL_MS = 10 * 1000;
 const DOWNLOADS_AT_ONCE = 4;
 // waits before retrying an image that didn't load, then it counts as failed
@@ -133,8 +141,8 @@ const EndedPage = ({ ended }: { ended: Ended }) => {
 
 // The theme the board was last edited in, so viewers see it the way its
 // owner does (dark mode inverts the drawing's colours, but not its images).
-const boardTheme = (board: Board): Theme =>
-  board.appState.theme === "dark" ? "dark" : "light";
+const boardTheme = (appState: { theme?: string }): Theme =>
+  appState.theme === "dark" ? "dark" : "light";
 
 // image file ids, top to bottom and left to right on the board
 const imageIds = (elements: readonly ExcalidrawElement[]) => {
@@ -199,6 +207,8 @@ const Viewer = ({
 }) => {
   const [api, setApi] = useState<ExcalidrawImperativeAPI | null>(null);
   const [name, setName] = useState(initial.name);
+  // the theme the board is shown in on its owner's screen; viewers can't change it
+  const [theme, setTheme] = useState<Theme>(boardTheme(initial.appState));
   const rev = useRef(initial.rev);
   const loadedFiles = useRef(new Set<string>());
   // images being loaded now; starts over once a batch is through
@@ -286,6 +296,8 @@ const Viewer = ({
       try {
         if (document.visibilityState === "visible") {
           const head = await getJSON(`${API}/head`);
+          // switching themes doesn't change the board's rev
+          setTheme(boardTheme(head));
           if (head.rev !== rev.current) {
             const board: Board = await getJSON(API);
             rev.current = board.rev;
@@ -332,11 +344,12 @@ const Viewer = ({
       <Excalidraw
         onExcalidrawAPI={setApi}
         viewModeEnabled
+        theme={theme}
+        googleFonts={GOOGLE_FONTS}
         initialData={{
           elements: initial.elements,
           appState: {
             viewBackgroundColor: initial.appState.viewBackgroundColor,
-            theme: boardTheme(initial),
           },
         }}
         // open with the whole board in view (zoomed out as far as needed, never in past 100%)
@@ -356,7 +369,8 @@ const Viewer = ({
             loadScene: false,
             saveToActiveFile: false,
             saveAsImage: false,
-            toggleTheme: true,
+            // always the board's own theme, so everyone sees the same thing
+            toggleTheme: false,
           },
           tools: { image: false },
         }}
@@ -379,7 +393,6 @@ const Viewer = ({
         }}
       >
         <MainMenu>
-          <MainMenu.DefaultItems.ToggleTheme allowSystemTheme={false} />
           <MainMenu.DefaultItems.Help />
         </MainMenu>
       </Excalidraw>
