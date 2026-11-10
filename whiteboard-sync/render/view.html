@@ -82,6 +82,38 @@
         overflow: hidden;
         text-overflow: ellipsis;
       }
+      .wbv-progress {
+        position: fixed;
+        top: 16px;
+        left: 50%;
+        transform: translateX(-50%);
+        z-index: 10;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        max-width: calc(100vw - 32px);
+        box-sizing: border-box;
+        padding: 6px 14px;
+        border-radius: 999px;
+        background: #e0dfff;
+        color: #2e2c5a;
+        font: 500 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
+        pointer-events: auto;
+      }
+      .wbv-progress--warn {
+        background: #fff3bf;
+        color: #5c3c00;
+      }
+      .wbv-progress button {
+        border: 0;
+        background: none;
+        color: inherit;
+        font-size: 18px;
+        line-height: 1;
+        cursor: pointer;
+        padding: 0 2px;
+      }
       .wbv-badge__mode {
         color: var(--color-gray-50, #888);
         flex-shrink: 0;

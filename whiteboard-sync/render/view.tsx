@@ -24,7 +24,7 @@ import type { ExcalidrawElement, Theme } from "@excalidraw/element/types";
 type Board = {
   name: string;
   elements: ExcalidrawElement[];
-  appState: { viewBackgroundColor?: string };
+  appState: { viewBackgroundColor?: string; theme?: string };
   rev: number;
   expiresAt: number;
 };
@@ -37,6 +37,10 @@ type Ended = {
 
 const POLL_MS = 10 * 1000;
 const DOWNLOADS_AT_ONCE = 4;
+// waits before retrying an image that didn't load, then it counts as failed
+const RETRY_DELAYS_MS = [2000, 6000];
+
+const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 const token = (location.pathname.match(/^\/s\/([^/]+)\/?$/) || [])[1] || "";
 const API = `/api/shared/${encodeURIComponent(token)}`;
@@ -127,10 +131,64 @@ const EndedPage = ({ ended }: { ended: Ended }) => {
   );
 };
 
-const systemTheme = (): Theme =>
-  window.matchMedia?.("(prefers-color-scheme: dark)").matches
-    ? "dark"
-    : "light";
+// The theme the board was last edited in, so viewers see it the way its
+// owner does (dark mode inverts the drawing's colours, but not its images).
+const boardTheme = (board: Board): Theme =>
+  board.appState.theme === "dark" ? "dark" : "light";
+
+// image file ids, top to bottom and left to right on the board
+const imageIds = (elements: readonly ExcalidrawElement[]) => {
+  const at = new Map<string, [number, number]>();
+  for (const el of elements) {
+    if (el.type === "image" && el.fileId && !at.has(el.fileId)) {
+      at.set(el.fileId, [el.y, el.x]);
+    }
+  }
+  return [...at.keys()].sort((a, b) => {
+    const [ay, ax] = at.get(a)!;
+    const [by, bx] = at.get(b)!;
+    return ay - by || ax - bx;
+  });
+};
+
+type Progress = { total: number; done: number; failed: number };
+
+// "Loading images 7/20", then gone; or what couldn't be loaded
+const ImageProgress = ({
+  progress,
+  onClose,
+}: {
+  progress: Progress;
+  onClose: () => void;
+}) => {
+  const { total, done, failed } = progress;
+  if (!total) {
+    return null;
+  }
+  const finished = done + failed >= total;
+  if (finished && !failed) {
+    return null;
+  }
+  return (
+    <div
+      className={`wbv-progress${finished ? " wbv-progress--warn" : ""}`}
+      role="status"
+    >
+      <span>
+        {finished
+          ? `${failed} of ${total} image${
+              total === 1 ? "" : "s"
+            } couldn't be loaded. Try reloading the page.`
+          : `Loading images ${done}/${total}`}
+      </span>
+      {finished && (
+        <button type="button" aria-label="Close" onClick={onClose}>
+          ×
+        </button>
+      )}
+    </div>
+  );
+};
 
 const Viewer = ({
   initial,
@@ -143,6 +201,9 @@ const Viewer = ({
   const [name, setName] = useState(initial.name);
   const rev = useRef(initial.rev);
   const loadedFiles = useRef(new Set<string>());
+  // images being loaded now; starts over once a batch is through
+  const batch = useRef<Progress>({ total: 0, done: 0, failed: 0 });
+  const [progress, setProgress] = useState<Progress>(batch.current);
 
   // the board's images, a few at a time, each shown as soon as it arrives
   const loadImages = useCallback(
@@ -150,27 +211,50 @@ const Viewer = ({
       if (!api) {
         return;
       }
-      const ids = [
-        ...new Set(
-          elements.flatMap((el) =>
-            el.type === "image" && el.fileId ? [el.fileId as string] : [],
-          ),
-        ),
-      ].filter((id) => !loadedFiles.current.has(id));
+      const ids = imageIds(elements).filter(
+        (id) => !loadedFiles.current.has(id),
+      );
+      if (!ids.length) {
+        return;
+      }
       ids.forEach((id) => loadedFiles.current.add(id));
-      const queue = [...ids];
-      const worker = async () => {
-        for (let id = queue.shift(); id; id = queue.shift()) {
+      const b = batch.current;
+      if (b.done + b.failed >= b.total) {
+        batch.current = { total: 0, done: 0, failed: 0 };
+      }
+      batch.current.total += ids.length;
+      const current = batch.current;
+      const update = () => setProgress({ ...current });
+      update();
+
+      const load = async (id: string) => {
+        for (let attempt = 0; ; attempt++) {
           try {
             const file = await getJSON(
               `${API}/files/${encodeURIComponent(id)}`,
             );
             api.addFiles([file as BinaryFileData]);
+            return true;
           } catch (e) {
-            // try again with the next change to the board
-            loadedFiles.current.delete(id);
-            console.warn(`couldn't load image ${id}`, e);
+            if (e instanceof LinkEnded || attempt >= RETRY_DELAYS_MS.length) {
+              console.warn(`couldn't load image ${id}`, e);
+              return false;
+            }
+            await wait(RETRY_DELAYS_MS[attempt]);
           }
+        }
+      };
+      const queue = [...ids];
+      const worker = async () => {
+        for (let id = queue.shift(); id; id = queue.shift()) {
+          if (await load(id)) {
+            current.done++;
+          } else {
+            current.failed++;
+            // tried again with the next change to the board
+            loadedFiles.current.delete(id);
+          }
+          update();
         }
       };
       await Promise.all(
@@ -244,52 +328,66 @@ const Viewer = ({
   }, [api, loadImages, onEnded]);
 
   return (
-    <Excalidraw
-      onExcalidrawAPI={setApi}
-      viewModeEnabled
-      initialData={{
-        elements: initial.elements,
-        appState: {
-          viewBackgroundColor: initial.appState.viewBackgroundColor,
-          theme: systemTheme(),
-        },
-        scrollToContent: true,
-      }}
-      UIOptions={{
-        canvasActions: {
-          changeViewBackgroundColor: false,
-          clearCanvas: false,
-          export: false,
-          loadScene: false,
-          saveToActiveFile: false,
-          saveAsImage: false,
-          toggleTheme: true,
-        },
-        tools: { image: false },
-      }}
-      renderTopRightUI={() => (
-        <div className="wbv-badge" title={name}>
-          <span className="wbv-badge__name">{name}</span>
-          <span className="wbv-badge__mode">· View only</span>
-        </div>
-      )}
-      onLinkOpen={(element, event) => {
-        // links to other parts of this board move the view there
-        if (element.link && isElementLink(element.link)) {
-          event.preventDefault();
-          api?.setViewport({
-            target: element.link,
+    <>
+      <Excalidraw
+        onExcalidrawAPI={setApi}
+        viewModeEnabled
+        initialData={{
+          elements: initial.elements,
+          appState: {
+            viewBackgroundColor: initial.appState.viewBackgroundColor,
+            theme: boardTheme(initial),
+          },
+        }}
+        // open with the whole board in view (zoomed out as far as needed, never in past 100%)
+        initialState={{
+          viewport: {
+            target: initial.elements,
             fit: "scale-down",
-            animation: true,
-          });
-        }
-      }}
-    >
-      <MainMenu>
-        <MainMenu.DefaultItems.ToggleTheme allowSystemTheme={false} />
-        <MainMenu.DefaultItems.Help />
-      </MainMenu>
-    </Excalidraw>
+            // clear of the menu, name badge and zoom buttons, with a margin at the sides
+            offsets: { top: 72, bottom: 72, left: 32, right: 32 },
+          },
+        }}
+        UIOptions={{
+          canvasActions: {
+            changeViewBackgroundColor: false,
+            clearCanvas: false,
+            export: false,
+            loadScene: false,
+            saveToActiveFile: false,
+            saveAsImage: false,
+            toggleTheme: true,
+          },
+          tools: { image: false },
+        }}
+        renderTopRightUI={() => (
+          <div className="wbv-badge" title={name}>
+            <span className="wbv-badge__name">{name}</span>
+            <span className="wbv-badge__mode">· View only</span>
+          </div>
+        )}
+        onLinkOpen={(element, event) => {
+          // links to other parts of this board move the view there
+          if (element.link && isElementLink(element.link)) {
+            event.preventDefault();
+            api?.setViewport({
+              target: element.link,
+              fit: "scale-down",
+              animation: true,
+            });
+          }
+        }}
+      >
+        <MainMenu>
+          <MainMenu.DefaultItems.ToggleTheme allowSystemTheme={false} />
+          <MainMenu.DefaultItems.Help />
+        </MainMenu>
+      </Excalidraw>
+      <ImageProgress
+        progress={progress}
+        onClose={() => setProgress({ total: 0, done: 0, failed: 0 })}
+      />
+    </>
   );
 };
 

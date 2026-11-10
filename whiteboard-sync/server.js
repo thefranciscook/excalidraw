@@ -21,7 +21,8 @@
 // Opening them is public (Caddy lets /s/* and /api/shared/* past its login):
 //
 //   GET    /s/:token                      the viewer page (render/view.html)
-//   GET    /api/shared/:token             {name, elements, appState, rev, expiresAt}; deleted elements left out.
+//   GET    /api/shared/:token             {name, elements, appState: {viewBackgroundColor, theme}, rev, expiresAt};
+//                                         deleted elements left out.
 //                                         410 {status: "expired"|"revoked"|"missing", contact} when it's over
 //   GET    /api/shared/:token/head        {rev}, to poll for changes
 //   GET    /api/shared/:token/files/:fileId  an image, only if the board shows it
@@ -430,7 +431,11 @@ const handleShared = async (req, res, token, sub, fileId) => {
   sendPublic(res, 200, {
     name: board.name,
     elements: (board.elements || []).filter((e) => !e.isDeleted),
-    appState: { viewBackgroundColor: (board.appState || {}).viewBackgroundColor },
+    // the theme it was last edited in, so viewers see it as its owner does
+    appState: {
+      viewBackgroundColor: (board.appState || {}).viewBackgroundColor,
+      theme: (board.appState || {}).theme === "dark" ? "dark" : "light",
+    },
     rev: board.rev || 0,
     expiresAt: share.expiresAt,
   });
