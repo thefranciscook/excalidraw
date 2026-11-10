@@ -319,8 +319,27 @@ const uploadFile = (id, mimeType, base64) =>
     fileIndex.set(id, filePath);
   });
 
+// Files the connector just stored, until GitHub surely serves them: the
+// picture Claude gets back is rendered right after it draws.
+const RECENT_FILES = 40;
+const recentFiles = new Map();
+
+// Stores an image Claude put on a board ({id, mimeType, dataURL}), where
+// browsers get images from. Resolves once it's stored.
+const putFile = async ({ id, mimeType, dataURL }) => {
+  const m = typeof dataURL === "string" && dataURL.match(/^data:([^;,]+);base64,(.+)$/s);
+  if (!GITHUB_TOKEN || !FILE_ID_RE.test(id) || !m || m[1] !== mimeType || !Object.hasOwn(MIME_EXT, mimeType)) {
+    throw new Error(`can't store file ${id} (${mimeType})`);
+  }
+  recentFiles.delete(id);
+  recentFiles.set(id, { id, mimeType, dataURL, created: Date.now() });
+  while (recentFiles.size > RECENT_FILES) recentFiles.delete(recentFiles.keys().next().value);
+  await uploadFile(id, mimeType, m[2]);
+};
+
 // {id, mimeType, dataURL, created}, or null when there's no such file
 const getFile = async (id) => {
+  if (recentFiles.has(id)) return recentFiles.get(id);
   if (!GITHUB_TOKEN || !FILE_ID_RE.test(id)) return null;
   const filePath = await findFile(id);
   if (!filePath) return null;
@@ -450,6 +469,8 @@ const connector = require("./mcp")({
       .filter((f) => f.endsWith(".json"))
       .map((f) => f.slice(0, -5)),
   getFile,
+  // without image storage, Claude can't add images
+  putFile: GITHUB_TOKEN ? putFile : null,
   noteClaudeActivity,
 });
 

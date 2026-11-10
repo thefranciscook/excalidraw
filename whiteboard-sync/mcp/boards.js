@@ -180,6 +180,7 @@ module.exports = function createBoards({ readBoard, listBoardIds, publicUrl }) {
       const to = el.endBinding && pos.byId.get(el.endBinding.elementId);
       if (from || to) details.push(`${from ? from.id : "·"} → ${to ? to.id : "·"}`);
     }
+    if (el.groupIds && el.groupIds.length) details.push(`group ${el.groupIds.join(" in ")}`);
     if (el.backgroundColor && !DEFAULT_COLORS.has(norm(el.backgroundColor))) details.push(`fill ${el.backgroundColor}`);
     if (el.strokeColor && !DEFAULT_COLORS.has(norm(el.strokeColor))) details.push(`stroke ${el.strokeColor}`);
     return `${parts.join(" ")} (${details.join(", ")})`;
@@ -207,7 +208,8 @@ module.exports = function createBoards({ readBoard, listBoardIds, publicUrl }) {
         ? texts.map((el) => {
             const color = el.strokeColor && !DEFAULT_COLORS.has(norm(el.strokeColor)) ? `, ${el.strokeColor}` : "";
             const label = el.containerId ? `, label of ${el.containerId}` : "";
-            return `- "${textOf(el).replace(/\n+/g, " / ")}" (id ${el.id}, ${at(el)}, ${px(el.fontSize || 0)}px${color}${label})`;
+            const group = !el.containerId && el.groupIds && el.groupIds.length ? `, group ${el.groupIds.join(" in ")}` : "";
+            return `- "${textOf(el).replace(/\n+/g, " / ")}" (id ${el.id}, ${at(el)}, ${px(el.fontSize || 0)}px${color}${label}${group})`;
           })
         : ["- (none)"]),
     );
