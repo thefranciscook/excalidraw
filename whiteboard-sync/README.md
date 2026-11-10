@@ -84,9 +84,18 @@ Claude gets these tools:
 - `get_image`: one original image at full resolution.
 - `get_changes`: what changed since Claude last looked, and who changed it (you, or Claude in another chat), with the changed elements outlined on a picture.
 - `create_board`: a new, empty board.
-- `add_elements`: draws shapes, text, arrows, sticky notes and frames, given as Excalidraw element skeletons. Arrows bind to the elements they connect, labels sit inside their shapes, and positions are relative to the frame an element is in.
-- `update_elements`: moves, resizes, restyles and relabels elements by id. Bound arrows follow, and a frame takes its contents along.
-- `delete_elements`: deletes elements with their labels (a frame with its contents).
+- `add_elements`: draws shapes, text, arrows, sticky notes and frames, given as Excalidraw element skeletons. Arrows bind to the elements they connect, labels sit inside their shapes, and positions are relative to the frame an element is in. For more precise, designed work it also takes:
+  - corner radii (`cornerRadius`), any stroke width, every arrowhead Excalidraw has, curved lines through points, and closed lines filled as polygons;
+  - `path`: SVG path data (Bézier curves, arcs), flattened into lines and filled polygons (`render/vector.ts`);
+  - `svg`: SVG markup or a link to one, turned into editable rectangles, ellipses, lines, polygons and texts, grouped (`render/svgImport.ts`). Gradients become one color; filters, masks and bitmaps inside are left out;
+  - `image`: a PNG, JPEG, GIF, WebP or SVG picture from a link, a data URL or SVG markup, or an image already on the board;
+  - text: bold, italic and underline (all of it or parts), line height, any font size, all of Excalidraw's fonts, and fixed-width text boxes that wrap;
+  - groups (`group`) and a place in the stacking order (`z`, `above`, `below`).
+- `update_elements`: moves, resizes, restyles, relabels, regroups and restacks elements by id. A group id stands for all its elements, and moves them as one. Bound arrows follow, and a frame takes its contents along.
+- `delete_elements`: deletes elements with their labels (a frame with its contents, a group id all of its elements).
+- `arrange_elements`: aligns elements or groups (left, center, right, top, middle, bottom) and spaces them evenly or by a set gap, within the box around them or within their frame.
+
+Images Claude adds are stored in the images repo like any other (so they need `GITHUB_TOKEN`), named by the SHA-1 of their bytes, before the elements showing them are saved. Links are fetched by the server: only public http(s) addresses (no loopback, private or link-local ones, checked again at each redirect), up to 8 MB, within 20 seconds (`mcp/media.js`).
 
 The drawing tools answer with a fresh picture, so Claude can look at what it drew and fix it. They build the elements with Excalidraw's own code in headless Chromium (`render/ops.html`), so text is measured with the real fonts, and then merge them into the board as `claude`. Your open tab picks them up within about 2 seconds. Every tool's answer also lists what you changed since Claude's last look: the connector keeps the board `rev` Claude last saw in `data/claude-cursor.json` and reads the journal from there. One cursor is shared by all chats, so edits from another chat show up as "Claude, in another chat".
 
