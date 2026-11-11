@@ -1,3 +1,5 @@
+> **Independent Excalidraw fork.** Based on [Excalidraw](https://github.com/excalidraw/excalidraw), Copyright (c) 2020 Excalidraw, under the MIT License. See [LICENSE](LICENSE) and [NOTICE.md](NOTICE.md). This fork is not affiliated with or endorsed by the upstream Excalidraw project.
+
 <a href="https://excalidraw.com/" target="_blank" rel="noopener">
   <picture>
     <source media="(prefers-color-scheme: dark)" alt="Excalidraw" srcset="https://excalidraw.nyc3.cdn.digitaloceanspaces.com/github/excalidraw_github_cover_2_dark.png" />
