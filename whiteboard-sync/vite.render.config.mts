@@ -1,7 +1,7 @@
 // Builds the connector's headless pages (whiteboard-sync/render/) into
 // excalidraw-app/build/render/: render.html (renders a board or frame),
 // ops.html (builds Claude's edits with Excalidraw's own element code), and
-// view.html, the public view-only page for boards shared by link (/s/<token>).
+// view.html, the public page for boards shared by link (/s/<token>), to view or edit.
 // Reuses the app's aliases and plugins, minus the ones that only make sense
 // for the editor (PWA, sitemap, type checker, HTML minifier).
 //

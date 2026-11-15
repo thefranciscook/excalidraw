@@ -247,6 +247,13 @@ module.exports = function createBoards({ readBoard, listBoardIds, publicUrl }) {
 
   const OP_WORDS = { add: "added", update: "changed", delete: "deleted" };
   const WHO = { human: "the user", claude: "Claude, in another chat" };
+  // "guest" / "guest:<label>": someone the user gave an edit link (shares.js)
+  const whoIs = (author) => {
+    if (WHO[author]) return WHO[author];
+    const guest = /^guest(?::(.+))?$/.exec(author);
+    if (guest) return guest[1] ? `${guest[1]} (a guest the user shared the board with)` : "a guest the user shared the board with";
+    return author;
+  };
 
   // folded journal changes (scene.js foldChanges) as a list for Claude
   const changesText = (board, folded) => {
@@ -265,7 +272,7 @@ module.exports = function createBoards({ readBoard, listBoardIds, publicUrl }) {
     }
     for (const ch of shown.values()) {
       const el = all.get(ch.id);
-      const who = ch.authors.map((a) => WHO[a] || a).join(" and ");
+      const who = ch.authors.map(whoIs).join(" and ");
       const what = el ? (ch.op === "delete" ? `${shapeName(el)}${el.type === "text" ? " " + quote(textOf(el)) : ""} (id ${el.id})` : describe(el, pos)) : `element ${ch.id}`;
       lines.push(`- ${OP_WORDS[ch.op] || ch.op} ${what}, by ${who}`);
     }

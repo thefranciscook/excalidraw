@@ -9,7 +9,7 @@
 // excalidraw-app App.tsx).
 //
 // It also shows messages under the toolbar (image saving, Claude at work on
-// the board), each of which can be closed.
+// the board, who has it open through an edit link), each of which can be closed.
 (function () {
   var match = location.pathname.match(/^\/b\/([a-z0-9]{10})\/?$/);
   if (!match) {
@@ -307,7 +307,7 @@
   // until they're resolved or closed. A closed message stays closed until
   // what it says changes (its `sig`), or it goes away and comes back.
   var messages = {}; // key -> {text, tone: "info"|"warn"|"claude", sig}
-  var MESSAGE_ORDER = ["claude", "images-warn", "images-missing", "images-progress"];
+  var MESSAGE_ORDER = ["claude", "guests", "images-warn", "images-missing", "images-progress"];
   // closed messages: key -> sig. Those in KEEP_CLOSED stay closed across
   // reloads, so a warning that can't be acted on here doesn't come back on
   // every visit (only when it changes).
@@ -483,6 +483,23 @@
     if (claude && typeof claude.drewAgo === "number") claudeDrewAt = Math.max(claudeDrewAt, now - claude.drewAgo);
     if (claude && typeof claude.lookedAgo === "number") claudeLookedAt = Math.max(claudeLookedAt, now - claude.lookedAgo);
     showClaude();
+  };
+
+  // "Anna is on this board": the people who have it open through an edit
+  // link right now, by the names their links were given (GET .../head).
+  var noteGuests = function (guests) {
+    var text = "";
+    if (guests && guests.length) {
+      var names = guests.filter(function (g) {
+        return g;
+      });
+      var unnamed = guests.length - names.length;
+      if (unnamed) names.push(names.length ? "someone else with an edit link" : "Someone with an edit link");
+      var last = names.pop();
+      text = (names.length ? names.join(", ") + " and " + last + " are" : last + " is") + " on this board";
+    }
+    setMessage("guests", text ? { tone: "info", sig: text, text: text } : null);
+    renderMessages();
   };
 
   var download = function (id, next) {
@@ -814,7 +831,10 @@
         return apiOk(res) ? res.json() : null;
       })
       .then(function (head) {
-        if (head) noteClaude(head.claude);
+        if (head) {
+          noteClaude(head.claude);
+          noteGuests(head.guests);
+        }
         if (!head || head.rev <= knownRev) return;
         return fetch(API, { cache: "no-store" })
           .then(function (res) {

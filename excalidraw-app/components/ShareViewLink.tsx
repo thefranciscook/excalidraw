@@ -8,13 +8,18 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import "./ShareViewLink.scss";
 
-// View-only links to a board on the self-hosted board server
-// (whiteboard-sync/shares.js): anyone with the link can look at the board,
-// nobody can edit it through the link, and the link stops working when it
-// expires or is turned off.
+// Links to a board on the self-hosted board server (whiteboard-sync/shares.js).
+// Anyone with a link can look at the board; with an edit link they can also
+// change it, together with you. A link stops working when it expires or is
+// turned off.
+
+type Role = "view" | "edit";
 
 type Share = {
   token: string;
+  role: Role;
+  /** who the link is for, if the owner said */
+  label: string;
   createdAt: number;
   expiresAt: number;
   expired: boolean;
@@ -24,6 +29,8 @@ type ShareList = {
   shares: Share[];
   contact: string | null;
   defaultDays: number;
+  /** edit links are shorter-lived unless asked otherwise */
+  defaultEditDays: number;
   maxDays: number;
 };
 
@@ -91,7 +98,10 @@ export const ShareViewLinkDialog = ({
 }) => {
   const base = `/api/boards/${boardId}/shares`;
   const [list, setList] = useState<ShareList | null>(null);
-  const [days, setDays] = useState(30);
+  const [role, setRole] = useState<Role>("view");
+  const [label, setLabel] = useState("");
+  // null: the default for the kind of link
+  const [chosenDays, setChosenDays] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [created, setCreated] = useState<string | null>(null);
@@ -109,17 +119,22 @@ export const ShareViewLinkDialog = ({
   }, [base]);
 
   useEffect(() => {
-    load().then((data) => data && setDays(data.defaultDays));
+    load();
   }, [load]);
+
+  const days =
+    chosenDays ??
+    (role === "edit" ? list?.defaultEditDays ?? 7 : list?.defaultDays ?? 30);
 
   const create = async () => {
     setBusy(true);
     try {
       const share: Share = await api(base, {
         method: "POST",
-        body: JSON.stringify({ days }),
+        body: JSON.stringify({ days, role, label }),
       });
       setCreated(share.token);
+      setLabel("");
       await load();
     } catch (e: any) {
       setError(`Couldn't create a link (${e.message}).`);
@@ -128,10 +143,12 @@ export const ShareViewLinkDialog = ({
     }
   };
 
-  const revoke = async (token: string) => {
+  const revoke = async ({ token, role }: Share) => {
     if (
       !window.confirm(
-        "Turn this link off? Anyone who has it won't be able to see the board anymore.",
+        role === "edit"
+          ? "Turn this link off? Anyone who has it won't be able to see or edit the board anymore. Their saved changes stay."
+          : "Turn this link off? Anyone who has it won't be able to see the board anymore.",
       )
     ) {
       return;
@@ -147,28 +164,83 @@ export const ShareViewLinkDialog = ({
     }
   };
 
+  const createdShare = list?.shares.find((s) => s.token === created);
   const others = (list?.shares ?? []).filter((s) => s.token !== created);
 
   return (
     <Dialog
       size="small"
-      title="Share a view-only link"
+      title="Share this board"
       onCloseRequest={onClose}
       className="ShareViewLink"
     >
       <p>
-        Anyone with the link can look at this board, and see changes as you make
-        them, but can't edit it. Links are random, so they can't be guessed.
+        Anyone with a link can look at this board, without logging in, and see
+        changes as you make them. With an edit link they can also change it,
+        together with you. Links are random, so they can't be guessed.
       </p>
 
-      {created && <CopyLink url={shareUrl(created)} label="New link" />}
+      {created && (
+        <CopyLink
+          url={shareUrl(created)}
+          label={
+            createdShare?.role === "edit" ? "New edit link" : "New view link"
+          }
+        />
+      )}
+
+      <fieldset className="ShareViewLink__role" disabled={busy}>
+        <legend>People with the link</legend>
+        <label>
+          <input
+            type="radio"
+            name="share-role"
+            checked={role === "view"}
+            onChange={() => setRole("view")}
+          />
+          <span>
+            <strong>Can view</strong>
+            <small>They can look, but not change, export or save it.</small>
+          </span>
+        </label>
+        <label>
+          <input
+            type="radio"
+            name="share-role"
+            checked={role === "edit"}
+            onChange={() => setRole("edit")}
+          />
+          <span>
+            <strong>Can edit</strong>
+            <small>
+              They can change everything on this board, and add images. Only
+              give it to people you trust.
+            </small>
+          </span>
+        </label>
+      </fieldset>
+
+      <TextField
+        label="Who is it for? (optional)"
+        placeholder={role === "edit" ? "e.g. Anna" : "e.g. Design team"}
+        value={label}
+        onChange={setLabel}
+        fullWidth
+      />
+      {role === "edit" && (
+        <p className="ShareViewLink__note">
+          The name shows while they have the board open, and in the board's
+          history next to their changes. Make one link per person, so you can
+          turn off just theirs.
+        </p>
+      )}
 
       <div className="ShareViewLink__create">
         <label>
           Expires after{" "}
           <select
             value={days}
-            onChange={(e) => setDays(Number(e.target.value))}
+            onChange={(e) => setChosenDays(Number(e.target.value))}
             disabled={busy}
           >
             {EXPIRY_CHOICES.filter((c) => !list || c.days <= list.maxDays).map(
@@ -198,15 +270,21 @@ export const ShareViewLinkDialog = ({
             {others.map((s) => (
               <li key={s.token}>
                 <div className="ShareViewLink__linkMeta">
-                  <code title={shareUrl(s.token)}>
-                    …/s/{s.token.slice(0, 8)}…
-                  </code>
+                  {s.label ? (
+                    <strong title={shareUrl(s.token)}>{s.label}</strong>
+                  ) : (
+                    <code title={shareUrl(s.token)}>
+                      …/s/{s.token.slice(0, 8)}…
+                    </code>
+                  )}
                   <span
                     className={s.expired ? "ShareViewLink__expired" : undefined}
                   >
+                    {s.role === "edit" ? "Can edit" : "Can view"}
+                    {" · "}
                     {s.expired
-                      ? `Expired ${formatDate(s.expiresAt)}`
-                      : `Expires ${formatDate(s.expiresAt)}`}
+                      ? `expired ${formatDate(s.expiresAt)}`
+                      : `expires ${formatDate(s.expiresAt)}`}
                   </span>
                 </div>
                 <div className="ShareViewLink__linkActions">
@@ -223,7 +301,7 @@ export const ShareViewLinkDialog = ({
                   <button
                     type="button"
                     className="ShareViewLink__danger"
-                    onClick={() => revoke(s.token)}
+                    onClick={() => revoke(s)}
                   >
                     {s.expired ? "Remove" : "Turn off"}
                   </button>
@@ -258,7 +336,7 @@ export const ShareViewLinkButton = ({ onClick }: { onClick: () => void }) => (
     type="button"
     className="share-view-link-button"
     onClick={onClick}
-    title="Share a view-only link to this board"
+    title="Share this board by link, to view or to edit"
   >
     {share}
     <span>Share</span>

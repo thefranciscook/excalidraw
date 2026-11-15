@@ -1,30 +1,41 @@
 // Tiny storage backend for the self-hosted Excalidraw at whiteboard.supa.company.
 // Stores each board as JSON and keeps periodic snapshots. Auth is handled by Caddy,
-// except for view-only share links (/s/*, /api/shared/*), which are public.
+// except for share links (/s/*, /api/shared/*), which are public.
 //
 //   GET    /api/boards           list boards (no elements)
 //   POST   /api/boards           create a board {name, elements?, appState?, files?} -> {id}
 //   GET    /api/boards/:id       full board
-//   GET    /api/boards/:id/head  {rev, savedAt, claude?}, cheap to poll for changes;
-//                                 claude: {drewAgo?, lookedAgo?} in ms, while Claude is at work there
+//   GET    /api/boards/:id/head  {rev, savedAt, claude?, guests?}, cheap to poll for changes;
+//                                 claude: {drewAgo?, lookedAgo?} in ms, while Claude is at work there;
+//                                 guests: labels of the edit links the board is open through right now
 //   PUT    /api/boards/:id       save scene {elements, appState} -> {rev, board?}
 //   PATCH  /api/boards/:id       rename {name}
 //   POST   /api/boards/:id/duplicate  copy a board as "<name> (copy)" -> {id, name}
 //   DELETE /api/boards/:id       move to data/trash
 //
-// View-only share links (shares.js). Managing them is behind the site login:
+// Share links (shares.js): "view" links to look at a board, "edit" links to
+// also change it. Managing them is behind the site login:
 //
-//   GET    /api/boards/:id/shares         {shares: [{token, createdAt, expiresAt, expired}], contact, defaultDays, maxDays}
-//   POST   /api/boards/:id/shares         new link {days?} (default 30) -> {token, createdAt, expiresAt}
+//   GET    /api/boards/:id/shares         {shares: [{token, role, label, createdAt, expiresAt, expired}],
+//                                          contact, defaultDays, defaultEditDays, maxDays}
+//   POST   /api/boards/:id/shares         new link {days?, role?, label?} (30 days, 7 for an edit link)
+//                                         -> {token, role, label, createdAt, expiresAt}
 //   DELETE /api/boards/:id/shares/:token  turn a link off
 //
 // Opening them is public (Caddy lets /s/* and /api/shared/* past its login):
 //
-//   GET    /s/:token                      the viewer page (render/view.html)
-//   GET    /api/shared/:token             {name, elements, appState, rev, expiresAt}; deleted elements left out.
+//   GET    /s/:token                      the shared board's page (render/view.html)
+//   GET    /api/shared/:token             {name, role, elements, appState, rev, expiresAt}; deleted elements
+//                                         left out. An edit link also gets {label, deleted, images}.
 //                                         410 {status: "expired"|"revoked"|"missing", contact} when it's over
 //   GET    /api/shared/:token/head        {rev}, to poll for changes
 //   GET    /api/shared/:token/files/:fileId  an image, only if the board shows it
+//
+// and with an edit link (403 with a view link):
+//
+//   PUT    /api/shared/:token             save elements {elements} -> {rev, board?}, merged like the
+//                                         owner's saves and journaled as "guest:<label>" (POST for sendBeacon)
+//   PUT    /api/shared/:token/files/:fileId  store an image {mimeType, dataURL}
 //
 // Image files are kept in a private GitHub repo (files/<fileId>.<ext>), not on
 // this disk. Needs GITHUB_TOKEN (fine-grained PAT, Contents read/write on that repo).
@@ -44,7 +55,7 @@ const path = require("path");
 const crypto = require("crypto");
 
 const { mergeElements, diffElements, clientIsBehind, pruneTombstones, createJournal } = require("./scene");
-const { createShares } = require("./shares");
+const { createShares, guestAuthor, validGuestElements, sharedScene } = require("./shares");
 
 const PORT = Number(process.env.PORT) || 3010;
 const DATA_DIR = path.join(__dirname, "data");
@@ -58,6 +69,11 @@ const SHARE_CONTACT = String(process.env.SHARE_CONTACT || "").trim().slice(0, 20
 const SNAPSHOT_INTERVAL_MS = 10 * 60 * 1000;
 const MAX_SNAPSHOTS_PER_BOARD = 200;
 const MAX_BODY = 50 * 1024 * 1024;
+// what someone with an edit link may send: a board's elements, or one image
+const GUEST_SCENE_MAX = 20 * 1024 * 1024;
+const GUEST_FILE_MAX = 8 * 1024 * 1024;
+// images per edit link, so a link that got out can't fill the images repo
+const GUEST_UPLOADS_PER_HOUR = 120;
 const ID_RE = /^[a-z0-9]{10}$/;
 
 for (const dir of [BOARDS_DIR, HISTORY_DIR, TRASH_DIR]) {
@@ -122,12 +138,12 @@ const send = (res, status, body) => {
   res.end(body === undefined ? undefined : JSON.stringify(body));
 };
 
-const readBody = (req, res, cb) => {
+const readBody = (req, res, cb, maxBody = MAX_BODY) => {
   const chunks = [];
   let size = 0;
   req.on("data", (c) => {
     size += c.length;
-    if (size > MAX_BODY) {
+    if (size > maxBody) {
       send(res, 413);
       req.destroy();
     } else {
@@ -176,7 +192,8 @@ const duplicateBoard = (board) =>
   });
 
 // Merges `elements` into the board and saves it. Synchronous, so two saves
-// can't interleave. `author` is "human" (a browser) or "claude" (the connector).
+// can't interleave. `author` is "human" (the owner's browser), "claude" (the
+// connector), or "guest" / "guest:<label>" (someone with an edit link).
 // -> { board, changes, rev } or null when the board doesn't exist
 const commit = (id, elements, author, { appState } = {}) => {
   const board = readBoard(id);
@@ -220,6 +237,27 @@ const claudeActivityOf = (id) => {
     return undefined;
   }
   return out;
+};
+
+// Who has the board open through an edit link right now, so the owner's tab
+// can say so. In memory only: their page asks for changes every 2 seconds.
+const GUEST_HERE_MS = 15 * 1000;
+const guestsSeen = new Map(); // board id -> Map(label -> when)
+const noteGuest = (id, label) => {
+  if (!guestsSeen.has(id)) guestsSeen.set(id, new Map());
+  guestsSeen.get(id).set(label || "", Date.now());
+};
+// labels ("" for a link without one), or undefined when nobody is there
+const guestsOf = (id) => {
+  const seen = guestsSeen.get(id);
+  if (!seen) return undefined;
+  const now = Date.now();
+  for (const [label, at] of seen) if (now - at > GUEST_HERE_MS) seen.delete(label);
+  if (!seen.size) {
+    guestsSeen.delete(id);
+    return undefined;
+  }
+  return [...seen.keys()].sort();
 };
 
 // --- Image files in GitHub ---
@@ -393,7 +431,7 @@ const handleFiles = async (req, res, id) => {
 if (GITHUB_TOKEN) loadIndex();
 else console.warn("GITHUB_TOKEN not set: image storage (/api/files) is disabled");
 
-// --- View-only share links, open to anyone with the link ---
+// --- Share links, open to anyone with the link ---
 
 // Not for search engines, and the link isn't passed on to sites the board links to.
 const PUBLIC_HEADERS = { "X-Robots-Tag": "noindex, nofollow", "Referrer-Policy": "no-referrer" };
@@ -403,7 +441,7 @@ const sendPublic = (res, status, body, cache = "no-store") => {
   res.end(JSON.stringify(body));
 };
 
-// the viewer page; it reads the token from the address and loads the board itself
+// the shared board's page; it reads the token from the address and loads the board itself
 const handleSharePage = (req, res, token) => {
   if (req.method !== "GET" && req.method !== "HEAD") return send(res, 405);
   let html;
@@ -425,20 +463,63 @@ const handleSharePage = (req, res, token) => {
 const showsFile = (board, fileId) =>
   (board.elements || []).some((e) => !e.isDeleted && e.type === "image" && e.fileId === fileId);
 
+// uploads per edit link in the last hour: token -> [when]
+const guestUploads = new Map();
+const mayUpload = (token) => {
+  const now = Date.now();
+  const recent = (guestUploads.get(token) || []).filter((at) => now - at < 60 * 60 * 1000);
+  if (recent.length >= GUEST_UPLOADS_PER_HOUR) {
+    guestUploads.set(token, recent);
+    return false;
+  }
+  recent.push(now);
+  guestUploads.set(token, recent);
+  return true;
+};
+
 const handleShared = async (req, res, token, sub, fileId) => {
-  if (req.method !== "GET") return sendPublic(res, 405, { status: "error" });
   const share = shares.resolve(token);
   const contact = SHARE_CONTACT || undefined;
   if (share.status === "unknown") return sendPublic(res, 404, { status: "unknown", contact });
   if (share.status !== "ok") return sendPublic(res, 410, { status: share.status, expiresAt: share.expiresAt, contact });
   const board = readBoard(share.boardId);
   if (!board) return sendPublic(res, 410, { status: "missing", contact });
+  const canEdit = share.role === "edit";
+  const reading = req.method === "GET";
+  // saving is PUT, or POST from navigator.sendBeacon as the page closes
+  const writing = req.method === "PUT" || (req.method === "POST" && !sub);
+  if (!reading && !(writing && sub !== "head")) return sendPublic(res, 405, { status: "error" });
+  if (writing && !canEdit) return sendPublic(res, 403, { status: "view-only" });
+  if (canEdit) noteGuest(share.boardId, share.label);
+  const scene = (b) => sharedScene(b, share, canEdit ? { images: !!GITHUB_TOKEN } : {});
 
   if (sub === "head") return sendPublic(res, 200, { rev: board.rev || 0 });
 
   if (sub === "files") {
+    if (!FILE_ID_RE.test(fileId)) return sendPublic(res, 404, { status: "error" });
+    if (writing) {
+      if (!GITHUB_TOKEN) return sendPublic(res, 503, { status: "error" });
+      if (fileIndex.has(fileId)) return sendPublic(res, 200, { status: "ok" });
+      if (!mayUpload(token)) return sendPublic(res, 429, { status: "error" });
+      return readBody(
+        req,
+        res,
+        (file) => {
+          const m = file && typeof file.dataURL === "string" && file.dataURL.match(/^data:([^;,]+);base64,([A-Za-z0-9+/=]+)$/);
+          if (!m || !Object.hasOwn(MIME_EXT, m[1])) return sendPublic(res, 400, { status: "error" });
+          uploadFile(fileId, m[1], m[2]).then(
+            () => sendPublic(res, 200, { status: "ok" }),
+            (e) => {
+              console.error(`couldn't store file ${fileId} from a shared board:`, e.message);
+              sendPublic(res, 502, { status: "error" });
+            },
+          );
+        },
+        GUEST_FILE_MAX,
+      );
+    }
     // only images on the board: a link to one board doesn't open the others' images
-    if (!FILE_ID_RE.test(fileId) || !showsFile(board, fileId)) return sendPublic(res, 404, { status: "error" });
+    if (!showsFile(board, fileId)) return sendPublic(res, 404, { status: "error" });
     const inline = board.files && Object.hasOwn(board.files, fileId) && board.files[fileId];
     const file = inline && inline.dataURL ? inline : await getFile(fileId);
     if (!file) return sendPublic(res, 404, { status: "error" });
@@ -446,13 +527,24 @@ const handleShared = async (req, res, token, sub, fileId) => {
     return sendPublic(res, 200, { id, mimeType, dataURL, created }, "private, max-age=86400");
   }
 
-  sendPublic(res, 200, {
-    name: board.name,
-    elements: (board.elements || []).filter((e) => !e.isDeleted),
-    appState: { viewBackgroundColor: (board.appState || {}).viewBackgroundColor },
-    rev: board.rev || 0,
-    expiresAt: share.expiresAt,
-  });
+  if (writing) {
+    // Elements only: the board's own settings stay the owner's.
+    return readBody(
+      req,
+      res,
+      (body) => {
+        const elements = body && body.elements;
+        if (!validGuestElements(elements)) return sendPublic(res, 400, { status: "error" });
+        const result = commit(share.boardId, elements, guestAuthor(share));
+        if (!result) return sendPublic(res, 410, { status: "missing", contact });
+        const behind = clientIsBehind(elements, result.board.elements);
+        sendPublic(res, 200, { rev: result.rev, ...(behind ? { board: scene({ ...result.board, rev: result.rev }) } : {}) });
+      },
+      GUEST_SCENE_MAX,
+    );
+  }
+
+  sendPublic(res, 200, scene(board));
 };
 
 // Claude connector (remote MCP server + its OAuth login). Caddy exposes these
@@ -562,16 +654,17 @@ http
           shares: shares.list(id),
           contact: SHARE_CONTACT || null,
           defaultDays: shares.DEFAULT_DAYS,
+          defaultEditDays: shares.DEFAULT_EDIT_DAYS,
           maxDays: shares.MAX_DAYS,
         });
       }
-      if (req.method === "POST") return readBody(req, res, (body) => send(res, 201, shares.create(id, body && body.days)));
+      if (req.method === "POST") return readBody(req, res, (body) => send(res, 201, shares.create(id, body || {})));
       return send(res, 405);
     }
 
     if (m[2]) {
       if (req.method !== "GET") return send(res, 405);
-      return send(res, 200, { rev: board.rev || 0, savedAt: board.savedAt, claude: claudeActivityOf(id) });
+      return send(res, 200, { rev: board.rev || 0, savedAt: board.savedAt, claude: claudeActivityOf(id), guests: guestsOf(id) });
     }
 
     if (req.method === "GET") return send(res, 200, { ...board, rev: board.rev || 0 });

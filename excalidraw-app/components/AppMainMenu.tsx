@@ -21,7 +21,7 @@ export const AppMainMenu: React.FC<{
   onCollabDialogOpen: () => any;
   isCollaborating: boolean;
   isCollabEnabled: boolean;
-  /** opens the view-only link dialog, on a self-hosted board (/b/<id>) */
+  /** opens the share-by-link dialog, on a self-hosted board (/b/<id>) */
   onShareViewLink?: () => void;
   theme: Theme | "system";
   refresh: () => void;
@@ -41,7 +41,7 @@ export const AppMainMenu: React.FC<{
       )}
       {props.onShareViewLink && (
         <MainMenu.Item icon={share} onSelect={props.onShareViewLink}>
-          Share view-only link
+          Share board
         </MainMenu.Item>
       )}
       <MainMenu.DefaultItems.CommandPalette className="highlighted" />

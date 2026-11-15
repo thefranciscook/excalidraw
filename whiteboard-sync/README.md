@@ -22,7 +22,7 @@ Without a token, `/api/files` answers 503 and images stay only in the browser.
 A board can be open in several places at once: your browser tabs and devices, and Claude through the connector. Each save is merged per element on the server (`scene.js`), the way Excalidraw's collaboration rooms merge: an element's newer version wins, and deletions are kept as tombstones, so no side loses the other's work.
 
 - `server-sync.js` pushes the open scene every 2 seconds (deleted elements included, through `window.wbGetElements` in `excalidraw-app/App.tsx`), and checks `GET /api/boards/<id>/head` every 2 seconds. When the board's `rev` moved on, it fetches the board and merges it into the open scene with `window.wbMergeRemote`. What you're editing stays as it is, and others' changes don't go into your undo history.
-- Each save that changes something gets the board's next `rev` and a line in `data/journal/<id>.jsonl`: `{rev, at, author, changes: [{id, type, op, version}]}`. The author is `human` for saves from the browser and `claude` for the connector. That's the board's history: who changed which element when. The 10-minute snapshots in `data/history/` are still there to restore from.
+- Each save that changes something gets the board's next `rev` and a line in `data/journal/<id>.jsonl`: `{rev, at, author, changes: [{id, type, op, version}]}`. The author is `human` for saves from your browser, `claude` for the connector, and `guest` or `guest:<name>` for someone with an edit link. That's the board's history: who changed which element when. The 10-minute snapshots in `data/history/` are still there to restore from.
 - Deleted elements are dropped from a board a month after their deletion.
 
 ## Messages on a board
@@ -31,20 +31,38 @@ An open board shows messages under the toolbar (`server-sync.js`), each with a c
 
 - Image progress ("Loading images 3/10", "Uploading 2 images…", "Images saved") goes away on its own.
 - Warnings about images (couldn't be saved on this device, couldn't be uploaded, never reached the server) stay until they're resolved or closed. A closed warning comes back when what it says changes, for example when more images are affected. "Never reached the server" stays closed across reloads, since there's nothing to do about it on that device.
+- "Anna is on this board" shows while someone has the board open through an edit link.
 - "Claude is drawing on this board…" (or "looking at") shows for 30 seconds after the connector last drew on or read the board. `GET /api/boards/<id>/head` says how long ago that was, in `claude: {drewAgo, lookedAgo}`. The server only remembers this in memory, for a minute.
 
 The tests (`whiteboard-sync/test/`) run with the rest of the repo's: `yarn vitest run whiteboard-sync`.
 
-## Sharing a board by link (view only)
+## Sharing a board by link
 
-The **Share** button at the top right of a board (or "Share view-only link" in the menu, on phones) makes a link anyone can open without logging in: `https://whiteboard.supa.company/s/<token>`. People with the link can pan, zoom and follow links, and they see your changes within about 10 seconds. They can't edit, export or save the board, and the link doesn't open any other board or image.
+The **Share** button at the top right of a board (or "Share board" in the menu, on phones) makes a link anyone can open without logging in: `https://whiteboard.supa.company/s/<token>`. A link is one of two kinds:
 
-- **Links can't be guessed.** The token is 24 random bytes (192 bits), unrelated to the board's id or name. The viewer never learns the board's id. Images are only served if they're on that board.
-- **Links expire**, after 30 days unless you pick 1 day, 7 days, 90 days or 1 year when you make one. You can turn a link off early in the same dialog. A board can have several links, each with its own expiry.
+- **Can view.** People with the link can pan, zoom and follow links, and they see your changes within about 10 seconds. They can't edit, export or save the board.
+- **Can edit.** People with the link get the editor on that board, and work on it together with you: their changes are saved every 2 seconds and reach your open board within about 2 seconds, and yours reach theirs. They can add images, export the board and save it as an image. They can't rename or delete the board, change its background, see your other boards, or make links.
+
+Either way, the link doesn't open any other board or image.
+
+- **Links can't be guessed.** The token is 24 random bytes (192 bits), unrelated to the board's id or name. The person never learns the board's id. Images are only served if they're on that board.
+- **Links expire**: view links after 30 days and edit links after 7, unless you pick 1 day, 7 days, 30 days, 90 days or 1 year when you make one. You can turn a link off early in the same dialog. A board can have several links, each with its own expiry.
+- **A link can have a name**, who it's for. Make one edit link per person: you can then turn off just theirs, and their name is on their changes.
 - **When a link has expired or was turned off**, the page says so and asks the person to contact you for a new one. Set who they should contact with `SHARE_CONTACT` in the server's environment, e.g. `SHARE_CONTACT=Szilard (you@example.com)`. An email address in it becomes a mailto link. Without it, the page says to ask the person who shared the link.
 - Links are kept in `data/shares.json`. Expired and turned-off links are forgotten 6 months after they ended (after that, the page just says the link doesn't work).
 
-The viewer page is `render/view.html`, built with the render pages by `rebuild.sh`. `server.js` serves it at `/s/<token>`, and the board's data at `/api/shared/<token>`.
+The page is `render/view.html`, built with the render pages by `rebuild.sh`. `server.js` serves it at `/s/<token>`, and the board's data at `/api/shared/<token>`.
+
+### Editing through a link
+
+An edit link is as good as a login to that one board, for anyone who gets hold of it, until it expires or you turn it off. Give it to people you trust.
+
+- **Their saves are merged like yours** (`scene.js`): per element, the newer version wins, so you can both work on the board at once. There are no live cursors; you see each other's changes a couple of seconds after they're made.
+- **You can see who's there and what they did.** While someone has the board open through an edit link, your board says "Anna is on this board" (by the link's name). Their changes are in the board's journal as `guest:Anna` (`guest` for a link without a name), and Claude's `get_changes` says they're by Anna, a guest.
+- **To undo what someone did**, use the 10-minute snapshots in `data/history/<id>/`.
+- **What you deleted stays deleted.** Someone with an edit link is told which elements were deleted, so the deletion reaches their open board, but not what was in them.
+- **Images** they add go to the images repo like yours: up to 8 MB each, and at most 120 per link an hour. Without `GITHUB_TOKEN` they can't add images.
+- **Nothing is kept in their browser.** If they close the tab while offline, changes that weren't saved yet are lost (the page asks before closing).
 
 ### Server setup (once)
 
@@ -70,7 +88,7 @@ whiteboard.supa.company {
 }
 ```
 
-Then run `rebuild.sh`, add `SHARE_CONTACT` to the environment, and restart `server.js`. To check it: `curl -i https://whiteboard.supa.company/api/shared/x` (in a private window, or without your login cookie) should answer 404 with JSON, not the login page.
+Then run `rebuild.sh`, add `SHARE_CONTACT` to the environment, and restart `server.js`. To check it: `curl -i https://whiteboard.supa.company/api/shared/x` (in a private window, or without your login cookie) should answer 404 with JSON, not the login page. Edit links need nothing more: they use the same paths.
 
 ## Claude connector
 
