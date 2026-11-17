@@ -4,6 +4,7 @@ Self-hosting add-ons for whiteboard.supa.company. On the VPS they live in `/home
 
 - `server.js`: `/api` backend (Node, 127.0.0.1:3010). Boards are stored as JSON in `data/`, and images go to a private GitHub repo.
 - `scene.js`: merges saves per element and keeps each board's journal (see "Live boards" below).
+- `versions.js`: commits each board to the images repo while it changes (see "Board versions" below).
 - `server-sync.js`, `boards.html`, `sw.js`: copied into the web root by `deploy-extras.sh`.
 - `rebuild.sh`: builds this fork with `vite.selfhost.config.mts` and deploys it to `/var/www/excalidraw`.
 
@@ -15,14 +16,38 @@ Self-hosting add-ons for whiteboard.supa.company. On the VPS they live in `/home
 - `GITHUB_REPO`: default `thefranciscook/whiteboard-images`.
 - `GITHUB_BRANCH`: default `main`.
 
-Without a token, `/api/files` answers 503 and images stay only in the browser.
+Without a token, `/api/files` answers 503 and images stay only in the browser, and no board versions are saved.
+
+## Board versions
+
+While a board changes, the server commits it to the images repo as `boards/<id>.json`, at most once every 10 minutes and always ending on the board's last state: a change is committed 10 minutes after the board's previous version, or a minute after the change when that's later. The file's history on GitHub is the board's version history. Each commit says which revs it covers and who made the changes:
+
+```
+Roadmap: rev 41 → 57, by human, guest:Anna
+```
+
+**Version history** in a board's menu lists the versions (the latest 100) with when they were saved and who changed the board, and shows the one you pick. From there you can:
+
+- **Restore this version.** The board goes back to how it was, for everyone who has it open (you, someone with an edit link, Claude), within a couple of seconds. It's a save like any other, merged per element: what differs comes back as it was, and what was added since is deleted. The board as it was just before is saved as a version first, so you can go back.
+- **Open as a new board.** A copy of the board as it was, next to the current one.
+
+Good to know:
+
+- **The boards' contents go to GitHub**, into the same private repo as the images. The file holds the board's elements, not the deleted ones and not the images (those are in `files/` already). The token needs nothing new: Contents read/write.
+- **Versions of a deleted board stay** in the repo.
+- **A version is a rev of the board's elements.** Renaming a board or scrolling it doesn't make one.
+- **When GitHub can't be reached**, the commit is tried again 10 minutes later. `data/versions.json` remembers what was committed last, so a restart of the server picks up where it left off.
+- `VERSION_MINUTES` in the server's environment changes the 10 minutes.
+- People with a share link don't get the version history.
+
+The 10-minute snapshots on the server's disk (`data/history/`) are still made, and don't depend on GitHub.
 
 ## Live boards
 
 A board can be open in several places at once: your browser tabs and devices, and Claude through the connector. Each save is merged per element on the server (`scene.js`), the way Excalidraw's collaboration rooms merge: an element's newer version wins, and deletions are kept as tombstones, so no side loses the other's work.
 
 - `server-sync.js` pushes the open scene every 2 seconds (deleted elements included, through `window.wbGetElements` in `excalidraw-app/App.tsx`), and checks `GET /api/boards/<id>/head` every 2 seconds. When the board's `rev` moved on, it fetches the board and merges it into the open scene with `window.wbMergeRemote`. What you're editing stays as it is, and others' changes don't go into your undo history.
-- Each save that changes something gets the board's next `rev` and a line in `data/journal/<id>.jsonl`: `{rev, at, author, changes: [{id, type, op, version}]}`. The author is `human` for saves from your browser, `claude` for the connector, and `guest` or `guest:<name>` for someone with an edit link. That's the board's history: who changed which element when. The 10-minute snapshots in `data/history/` are still there to restore from.
+- Each save that changes something gets the board's next `rev` and a line in `data/journal/<id>.jsonl`: `{rev, at, author, changes: [{id, type, op, version}]}`. The author is `human` for saves from your browser, `claude` for the connector, and `guest` or `guest:<name>` for someone with an edit link. That's the board's history: who changed which element when. To go back to an earlier state, see "Board versions".
 - Deleted elements are dropped from a board a month after their deletion.
 
 ## Messages on a board
@@ -59,7 +84,7 @@ An edit link is as good as a login to that one board, for anyone who gets hold o
 
 - **Their saves are merged like yours** (`scene.js`): per element, the newer version wins, so you can both work on the board at once. There are no live cursors; you see each other's changes a couple of seconds after they're made.
 - **You can see who's there and what they did.** While someone has the board open through an edit link, your board says "Anna is on this board" (by the link's name). Their changes are in the board's journal as `guest:Anna` (`guest` for a link without a name), and Claude's `get_changes` says they're by Anna, a guest.
-- **To undo what someone did**, use the 10-minute snapshots in `data/history/<id>/`.
+- **To undo what someone did**, restore an earlier version from **Version history** in the board's menu (see "Board versions").
 - **What you deleted stays deleted.** Someone with an edit link is told which elements were deleted, so the deletion reaches their open board, but not what was in them.
 - **Images** they add go to the images repo like yours: up to 8 MB each, and at most 120 per link an hour. Without `GITHUB_TOKEN` they can't add images.
 - **Nothing is kept in their browser.** If they close the tab while offline, changes that weren't saved yet are lost (the page asks before closing).

@@ -37,6 +37,17 @@
 //                                         owner's saves and journaled as "guest:<label>" (POST for sendBeacon)
 //   PUT    /api/shared/:token/files/:fileId  store an image {mimeType, dataURL}
 //
+// Board versions (versions.js): the server commits each board to the images
+// repo (boards/<id>.json) while it changes, at most every 10 minutes. Behind
+// the site login; 503 without GITHUB_TOKEN:
+//
+//   GET    /api/boards/:id/versions               {versions: [{sha, at, message, rev?, from?, authors?, restored?}], minutes}
+//   GET    /api/boards/:id/versions/:sha          {name, rev, savedAt, elements, appState} as it was
+//   POST   /api/boards/:id/versions/:sha/restore  bring that version back -> {rev}. A save like any
+//                                                 other, so open boards follow; the state before it
+//                                                 is kept as a version first.
+//   POST   /api/boards/:id/versions/:sha/copy     a new board from that version -> {id, name}
+//
 // Image files are kept in a private GitHub repo (files/<fileId>.<ext>), not on
 // this disk. Needs GITHUB_TOKEN (fine-grained PAT, Contents read/write on that repo).
 //
@@ -54,7 +65,8 @@ const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
 
-const { mergeElements, diffElements, clientIsBehind, pruneTombstones, createJournal } = require("./scene");
+const { mergeElements, diffElements, restoreTo, clientIsBehind, pruneTombstones, createJournal } = require("./scene");
+const { createVersions } = require("./versions");
 const { createShares, guestAuthor, validGuestElements, sharedScene } = require("./shares");
 
 const PORT = Number(process.env.PORT) || 3010;
@@ -195,7 +207,8 @@ const duplicateBoard = (board) =>
 // can't interleave. `author` is "human" (the owner's browser), "claude" (the
 // connector), or "guest" / "guest:<label>" (someone with an edit link).
 // -> { board, changes, rev } or null when the board doesn't exist
-const commit = (id, elements, author, { appState } = {}) => {
+// `note` is added to the journal entry, e.g. {restored: {sha, at}}.
+const commit = (id, elements, author, { appState, note } = {}) => {
   const board = readBoard(id);
   if (!board) return null;
   const merged = mergeElements(board.elements, elements);
@@ -207,10 +220,13 @@ const commit = (id, elements, author, { appState } = {}) => {
   if (changes.length) {
     updated.rev = (board.rev || 0) + 1;
     updated.savedAt = Date.now();
-    journal.append(id, { rev: updated.rev, at: updated.savedAt, author, changes });
+    journal.append(id, { rev: updated.rev, at: updated.savedAt, author, changes, ...note });
   }
   writeBoard(id, updated);
-  if (changes.length) snapshot(id, updated);
+  if (changes.length) {
+    snapshot(id, updated);
+    versions.schedule(id);
+  }
   return { board: updated, changes, rev: updated.rev || 0 };
 };
 
@@ -429,7 +445,73 @@ const handleFiles = async (req, res, id) => {
 };
 
 if (GITHUB_TOKEN) loadIndex();
-else console.warn("GITHUB_TOKEN not set: image storage (/api/files) is disabled");
+else console.warn("GITHUB_TOKEN not set: image storage (/api/files) and board versions are disabled");
+
+// --- Board versions, as commits to the images repo ---
+
+const listBoardIds = () =>
+  fs
+    .readdirSync(BOARDS_DIR)
+    .filter((f) => f.endsWith(".json"))
+    .map((f) => f.slice(0, -5));
+
+// VERSION_MINUTES: at most one version per board in this many minutes (default 10)
+const VERSION_MINUTES = Number(process.env.VERSION_MINUTES) > 0 ? Number(process.env.VERSION_MINUTES) : 10;
+
+const versions = createVersions({
+  github: GITHUB_TOKEN ? github : null,
+  intervalMs: VERSION_MINUTES * 60 * 1000,
+  branch: GITHUB_BRANCH,
+  queue: queueUpload,
+  file: path.join(DATA_DIR, "versions.json"),
+  readBoard,
+  journal,
+});
+versions.resume(listBoardIds());
+
+const handleVersions = async (req, res, id, board, sha, action) => {
+  if (!versions.enabled) return send(res, 503);
+  if (!sha) {
+    if (req.method !== "GET") return send(res, 405);
+    return send(res, 200, { versions: await versions.list(id), minutes: VERSION_MINUTES });
+  }
+  if (!versions.SHA_RE.test(sha)) return send(res, 404);
+  if (req.method !== (action ? "POST" : "GET")) return send(res, 405);
+  const old = await versions.get(id, sha);
+  if (!old) return send(res, 404);
+
+  if (!action) {
+    return send(res, 200, {
+      name: old.name,
+      rev: old.rev,
+      savedAt: old.savedAt,
+      elements: old.elements,
+      appState: { viewBackgroundColor: (old.appState || {}).viewBackgroundColor },
+    });
+  }
+
+  if (action === "copy") {
+    const day = new Date(old.savedAt > 0 ? old.savedAt : Date.now()).toISOString().slice(0, 10);
+    const copy = createBoard({
+      name: `${board.name} (${day})`,
+      elements: old.elements,
+      appState: old.appState || {},
+      files: board.files || {},
+    });
+    return send(res, 201, { id: copy.id, name: copy.name });
+  }
+
+  // Restore. First keep what's there now as a version, so this can be undone.
+  await versions.flush(id);
+  const current = readBoard(id);
+  if (!current) return send(res, 404);
+  const result = commit(id, restoreTo(current.elements, old.elements), "human", {
+    note: { restored: { sha, at: old.savedAt > 0 ? old.savedAt : 0 } },
+  });
+  // and the restored state right away, so the history shows it
+  versions.flush(id).catch((e) => console.error(`couldn't save a version of board ${id}:`, e.message));
+  send(res, 200, { rev: result.rev });
+};
 
 // --- Share links, open to anyone with the link ---
 
@@ -555,11 +637,7 @@ const connector = require("./mcp")({
   createBoard,
   commit,
   journal,
-  listBoardIds: () =>
-    fs
-      .readdirSync(BOARDS_DIR)
-      .filter((f) => f.endsWith(".json"))
-      .map((f) => f.slice(0, -5)),
+  listBoardIds,
   getFile,
   // without image storage, Claude can't add images
   putFile: GITHUB_TOKEN ? putFile : null,
@@ -591,7 +669,7 @@ http
         if (!res.headersSent) send(res, 502);
       });
     }
-    const m = url.pathname.match(/^\/api\/boards(?:\/([^/]+)(\/head|\/duplicate|\/shares(?:\/([^/]+))?)?)?$/);
+    const m = url.pathname.match(/^\/api\/boards(?:\/([^/]+)(\/head|\/duplicate|\/shares(?:\/([^/]+))?|\/versions(?:\/([^/]+)(?:\/(restore|copy))?)?)?)?$/);
     if (!m) return send(res, 404);
     const id = m[1];
 
@@ -641,6 +719,13 @@ http
       if (req.method !== "POST") return send(res, 405);
       const copy = duplicateBoard(board);
       return send(res, 201, { id: copy.id, name: copy.name });
+    }
+
+    if (m[2] && m[2].startsWith("/versions")) {
+      return handleVersions(req, res, id, board, m[4], m[5]).catch((e) => {
+        console.error("version request failed:", e.message);
+        if (!res.headersSent) send(res, 502);
+      });
     }
 
     if (m[2] && m[2].startsWith("/shares")) {

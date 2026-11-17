@@ -147,6 +147,7 @@ import { ExcalidrawPlusIframeExport } from "./ExcalidrawPlusIframeExport";
 import "./index.scss";
 
 import { AppSidebar } from "./components/AppSidebar";
+import { BoardVersionsDialog } from "./components/BoardVersions";
 import { ClaudeConnectorBanner } from "./components/ClaudeConnectorBanner";
 import {
   getBoardId,
@@ -891,6 +892,8 @@ const ExcalidrawWrapper = () => {
   const [boardId] = useState(getBoardId);
   const [isShareViewLinkOpen, setIsShareViewLinkOpen] = useState(false);
   const openShareViewLink = useCallback(() => setIsShareViewLinkOpen(true), []);
+  const [isBoardVersionsOpen, setIsBoardVersionsOpen] = useState(false);
+  const openBoardVersions = useCallback(() => setIsBoardVersionsOpen(true), []);
 
   const onCollabDialogOpen = useCallback(
     () => setShareDialogState({ isOpen: true, type: "collaborationOnly" }),
@@ -1106,6 +1109,7 @@ const ExcalidrawWrapper = () => {
           isCollaborating={isCollaborating}
           isCollabEnabled={isCollabAvailable}
           onShareViewLink={boardId ? openShareViewLink : undefined}
+          onBoardVersions={boardId ? openBoardVersions : undefined}
           theme={appTheme}
           refresh={() => forceRefresh((prev) => !prev)}
         />
@@ -1162,6 +1166,14 @@ const ExcalidrawWrapper = () => {
           <ShareViewLinkDialog
             boardId={boardId}
             onClose={() => setIsShareViewLinkOpen(false)}
+          />
+        )}
+        {boardId && isBoardVersionsOpen && excalidrawAPI && (
+          <BoardVersionsDialog
+            boardId={boardId}
+            getFiles={excalidrawAPI.getFiles}
+            theme={editorTheme}
+            onClose={() => setIsBoardVersionsOpen(false)}
           />
         )}
         <ShareDialog

@@ -48,7 +48,7 @@ export const getBoardId = () =>
 
 const shareUrl = (token: string) => `${window.location.origin}/s/${token}`;
 
-const api = async (url: string, opts: RequestInit = {}) => {
+export const api = async (url: string, opts: RequestInit = {}) => {
   const res = await fetch(url, {
     cache: "no-store",
     headers: { "Content-Type": "application/json" },

@@ -2,6 +2,7 @@ import {
   loginIcon,
   ExcalLogo,
   eyeIcon,
+  historyIcon,
   share,
 } from "@excalidraw/excalidraw/components/icons";
 import { useI18n } from "@excalidraw/excalidraw/i18n";
@@ -23,6 +24,8 @@ export const AppMainMenu: React.FC<{
   isCollabEnabled: boolean;
   /** opens the share-by-link dialog, on a self-hosted board (/b/<id>) */
   onShareViewLink?: () => void;
+  /** opens the board's version history, on a self-hosted board (/b/<id>) */
+  onBoardVersions?: () => void;
   theme: Theme | "system";
   refresh: () => void;
 }> = React.memo((props) => {
@@ -42,6 +45,11 @@ export const AppMainMenu: React.FC<{
       {props.onShareViewLink && (
         <MainMenu.Item icon={share} onSelect={props.onShareViewLink}>
           Share board
+        </MainMenu.Item>
+      )}
+      {props.onBoardVersions && (
+        <MainMenu.Item icon={historyIcon} onSelect={props.onBoardVersions}>
+          Version history
         </MainMenu.Item>
       )}
       <MainMenu.DefaultItems.CommandPalette className="highlighted" />

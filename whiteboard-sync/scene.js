@@ -80,6 +80,34 @@ function clientIsBehind(client, merged) {
   });
 }
 
+const newNonce = () => Math.floor(Math.random() * 2 ** 31);
+
+/**
+ * The elements to save so that a board holding `current` shows `old` (an
+ * earlier version's live elements) again. It's a save like any other, merged
+ * per element, so open copies of the board follow: elements that differ come
+ * back as they were, at a version above both, and elements made since then
+ * are deleted. Elements that are the same aren't touched.
+ */
+function restoreTo(current, old, now = Date.now()) {
+  const cur = new Map();
+  for (const el of current || []) if (isElement(el)) cur.set(el.id, el);
+  const kept = new Set();
+  const out = [];
+  for (const el of old || []) {
+    if (!isElement(el) || el.isDeleted) continue;
+    kept.add(el.id);
+    const c = cur.get(el.id);
+    if (c && !c.isDeleted && c.version === el.version && c.versionNonce === el.versionNonce) continue;
+    out.push({ ...el, isDeleted: false, version: Math.max(c ? c.version : 0, el.version) + 1, versionNonce: newNonce(), updated: now });
+  }
+  for (const c of cur.values()) {
+    if (c.isDeleted || kept.has(c.id)) continue;
+    out.push({ ...c, isDeleted: true, version: c.version + 1, versionNonce: newNonce(), updated: now });
+  }
+  return out;
+}
+
 // Deleted elements are kept so the deletion reaches every copy of the board,
 // then dropped after a month.
 const TOMBSTONE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
@@ -151,4 +179,4 @@ function foldChanges(entries, { skipRevs } = {}) {
     .map(({ first, authors, ...c }) => ({ ...c, authors: [...authors] }));
 }
 
-module.exports = { mergeElements, diffElements, clientIsBehind, pruneTombstones, createJournal, foldChanges, orderByIndex };
+module.exports = { mergeElements, diffElements, restoreTo, clientIsBehind, pruneTombstones, createJournal, foldChanges, orderByIndex };
