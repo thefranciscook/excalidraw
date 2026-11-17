@@ -1,5 +1,7 @@
 # CLAUDE.md
 
+Always read and follow `AGENTS.md` before working in this repo. It is imported here: @AGENTS.md
+
 ## Project Structure
 
 Excalidraw is a **monorepo** with a clear separation between the core library and the application:
