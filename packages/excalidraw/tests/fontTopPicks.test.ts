@@ -35,6 +35,24 @@ describe("restore appState.fontTopPicks", () => {
     ]);
   });
 
+  it("keeps web-safe system fonts, but not their bundled look-alikes", () => {
+    const restored = restoreAppState(
+      {
+        fontTopPicks: [
+          FONT_FAMILY.Georgia,
+          FONT_FAMILY_FALLBACKS.Gelasio,
+          FONT_FAMILY["Times New Roman"],
+          FONT_FAMILY_FALLBACKS.Tinos,
+        ],
+      } as any,
+      null,
+    );
+    expect(restored.fontTopPicks).toEqual([
+      FONT_FAMILY.Georgia,
+      FONT_FAMILY["Times New Roman"],
+    ]);
+  });
+
   it("caps at the strip slot count and nulls malformed input", () => {
     const many = [
       FONT_FAMILY.Nunito,

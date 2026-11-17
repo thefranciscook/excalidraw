@@ -36,7 +36,7 @@ export class ExcalidrawFontFace {
    */
   public toCSS(characters: string): Promise<string> | undefined {
     // quick exit in case the characters are not within this font face's unicode range
-    if (!this.getUnicodeRangeRegex().test(characters)) {
+    if (!this.covers(characters)) {
       return;
     }
 
@@ -50,6 +50,13 @@ export class ExcalidrawFontFace {
           this.fontFace.family,
         )}; src: url(${content}); }`,
     );
+  }
+
+  /**
+   * Whether any of the characters is within this font face's unicode range.
+   */
+  public covers(characters: string): boolean {
+    return this.getUnicodeRangeRegex().test(characters);
   }
 
   /**

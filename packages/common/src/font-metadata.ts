@@ -114,6 +114,125 @@ export const FONT_METADATA: Record<number, FontMetadata> = {
     },
     private: true,
   },
+  // web-safe system fonts, with the metrics of the installed font
+  [FONT_FAMILY.Arial]: {
+    metrics: {
+      unitsPerEm: 2048,
+      ascender: 1854,
+      descender: -434,
+      lineHeight: 1.15,
+    },
+    local: true,
+  },
+  [FONT_FAMILY["Comic Sans MS"]]: {
+    metrics: {
+      unitsPerEm: 2048,
+      ascender: 2257,
+      descender: -597,
+      lineHeight: 1.4,
+    },
+    local: true,
+  },
+  [FONT_FAMILY["Courier New"]]: {
+    metrics: {
+      unitsPerEm: 2048,
+      ascender: 1705,
+      descender: -615,
+      lineHeight: 1.15,
+    },
+    local: true,
+  },
+  [FONT_FAMILY.Georgia]: {
+    metrics: {
+      unitsPerEm: 2048,
+      ascender: 1878,
+      descender: -449,
+      lineHeight: 1.15,
+    },
+    local: true,
+  },
+  [FONT_FAMILY.Impact]: {
+    metrics: {
+      unitsPerEm: 2048,
+      ascender: 2066,
+      descender: -432,
+      lineHeight: 1.2,
+    },
+    local: true,
+  },
+  [FONT_FAMILY["Times New Roman"]]: {
+    metrics: {
+      unitsPerEm: 2048,
+      ascender: 1825,
+      descender: -443,
+      lineHeight: 1.15,
+    },
+    local: true,
+  },
+  [FONT_FAMILY.Verdana]: {
+    metrics: {
+      unitsPerEm: 2048,
+      ascender: 2059,
+      descender: -430,
+      lineHeight: 1.2,
+    },
+    local: true,
+  },
+  // bundled look-alikes of the web-safe system fonts (hhea metrics)
+  [FONT_FAMILY_FALLBACKS.Tinos]: {
+    metrics: {
+      unitsPerEm: 2048,
+      ascender: 1825,
+      descender: -443,
+      lineHeight: 1.15,
+    },
+    fallback: true,
+  },
+  [FONT_FAMILY_FALLBACKS.Cousine]: {
+    metrics: {
+      unitsPerEm: 2048,
+      ascender: 1705,
+      descender: -615,
+      lineHeight: 1.15,
+    },
+    fallback: true,
+  },
+  [FONT_FAMILY_FALLBACKS.Gelasio]: {
+    metrics: {
+      unitsPerEm: 2048,
+      ascender: 1900,
+      descender: -700,
+      lineHeight: 1.15,
+    },
+    fallback: true,
+  },
+  [FONT_FAMILY_FALLBACKS["Comic Relief"]]: {
+    metrics: {
+      unitsPerEm: 2048,
+      ascender: 2160,
+      descender: -697,
+      lineHeight: 1.4,
+    },
+    fallback: true,
+  },
+  [FONT_FAMILY_FALLBACKS.Anton]: {
+    metrics: {
+      unitsPerEm: 2048,
+      ascender: 2409,
+      descender: -674,
+      lineHeight: 1.2,
+    },
+    fallback: true,
+  },
+  [FONT_FAMILY_FALLBACKS["DejaVu Sans"]]: {
+    metrics: {
+      unitsPerEm: 2048,
+      ascender: 1901,
+      descender: -483,
+      lineHeight: 1.2,
+    },
+    fallback: true,
+  },
   [FONT_FAMILY_FALLBACKS.Xiaolai]: {
     metrics: {
       unitsPerEm: 1000,
@@ -147,6 +266,8 @@ export const GOOGLE_FONTS_RANGES = {
   CYRILIC: "U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116",
   VIETNAMESE:
     "U+0102-0103, U+0110-0111, U+0128-0129, U+0168-0169, U+01A0-01A1, U+01AF-01B0, U+0300-0301, U+0303-0304, U+0308-0309, U+0323, U+0329, U+1EA0-1EF9, U+20AB",
+  GREEK:
+    "U+0370-0377, U+037A-037F, U+0384-038A, U+038C, U+038E-03A1, U+03A3-03FF",
 };
 
 /** local protocol to skip the local font from registering or inlining */

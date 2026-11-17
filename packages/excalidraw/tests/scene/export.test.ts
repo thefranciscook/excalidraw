@@ -108,6 +108,42 @@ describe("exportToSvg", () => {
     // extend the timeout, as it needs to first load the fonts from disk and then perform whole woff2 decode, subset and encode (without workers)
   }, 30_000);
 
+  it("with a web-safe system font", async () => {
+    const svgElement = await exportScene({
+      type: "svg",
+      data: {
+        elements: [
+          {
+            ...textFixture,
+            fontFamily: FONT_FAMILY["Times New Roman"],
+            height: ELEMENT_HEIGHT,
+            width: ELEMENT_WIDTH,
+            index: "a0" as FractionalIndex,
+          } as NonDeleted<ExcalidrawTextElement>,
+        ],
+        appState: DEFAULT_APP_STATE,
+        files: {},
+      },
+      config: { canvasBackgroundColor: false },
+    });
+
+    // the text asks for the installed font first, then for its look-alike
+    expect(svgElement.querySelector("text")).toHaveAttribute(
+      "font-family",
+      "Times New Roman, Tinos, serif, Segoe UI Emoji",
+    );
+
+    // there is no font file of the system font to inline, so the bundled
+    // look-alike is inlined instead
+    const fontFaces =
+      svgElement.querySelector("style.style-fonts")!.textContent!;
+
+    expect(fontFaces).toMatch(
+      /@font-face \{ font-family: Tinos; src: url\(data:font\/woff2;base64,/,
+    );
+    expect(fontFaces).not.toContain("font-family: Times New Roman");
+  }, 30_000);
+
   it("with background color", async () => {
     const BACKGROUND_COLOR = "#abcdef";
 

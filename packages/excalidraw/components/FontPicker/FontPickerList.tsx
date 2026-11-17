@@ -69,6 +69,8 @@ export interface FontDescriptor {
   deprecated?: true;
   /** runtime (Google) font */
   google?: true;
+  /** web-safe system font (i.e. Arial), drawn with the installed font */
+  system?: true;
   badge?: {
     type: ValueOf<typeof DropDownMenuItemBadgeType>;
     placeholder: string;
@@ -106,9 +108,11 @@ export const getFontFamilyIcon = (
     case FONT_FAMILY.Helvetica:
       return FontFamilyNormalIcon;
     case FONT_FAMILY["Lilita One"]:
+    case FONT_FAMILY.Impact:
       return FontFamilyHeadingIcon;
     case FONT_FAMILY["Comic Shanns"]:
     case FONT_FAMILY.Cascadia:
+    case FONT_FAMILY["Courier New"]:
       return FontFamilyCodeIcon;
     default:
       return FontFamilyNormalIcon;
@@ -160,6 +164,10 @@ export const FontPickerList = React.memo(
               icon: getFontFamilyIcon(familyId),
               text: getFontFamilyLabel(familyId, fontFaces),
             };
+
+            if (metadata.local && !metadata.deprecated) {
+              Object.assign(fontDescriptor, { system: true });
+            }
 
             if (metadata.deprecated) {
               Object.assign(fontDescriptor, {
@@ -254,20 +262,32 @@ export const FontPickerList = React.memo(
       () =>
         allFonts.filter(
           (font) =>
+            !font.system &&
             !sceneFamilies.has(font.value) &&
             (showDeprecatedFonts || !font.deprecated), // skip deprecated fonts
         ),
       [allFonts, sceneFamilies, showDeprecatedFonts],
     );
 
+    const systemFonts = useMemo(
+      () =>
+        allFonts.filter(
+          (font) => font.system && !sceneFamilies.has(font.value),
+        ),
+      [allFonts, sceneFamilies],
+    );
+
     const filteredFonts = useMemo(
       () =>
         arrayToList(
-          [...sceneFonts, ...recentFonts, ...availableFonts].filter((font) =>
-            font.text?.toLowerCase().includes(searchTerm),
-          ),
+          [
+            ...sceneFonts,
+            ...recentFonts,
+            ...availableFonts,
+            ...systemFonts,
+          ].filter((font) => font.text?.toLowerCase().includes(searchTerm)),
         ),
-      [sceneFonts, recentFonts, availableFonts, searchTerm],
+      [sceneFonts, recentFonts, availableFonts, systemFonts, searchTerm],
     );
 
     const ownerDocument = container?.ownerDocument ?? document;
@@ -453,7 +473,16 @@ export const FontPickerList = React.memo(
     const availableFilteredFonts = useMemo(
       () =>
         filteredFonts.filter(
-          (font) => !font.google && !sceneFamilies.has(font.value),
+          (font) =>
+            !font.google && !font.system && !sceneFamilies.has(font.value),
+        ),
+      [filteredFonts, sceneFamilies],
+    );
+
+    const systemFilteredFonts = useMemo(
+      () =>
+        filteredFonts.filter(
+          (font) => font.system && !sceneFamilies.has(font.value),
         ),
       [filteredFonts, sceneFamilies],
     );
@@ -564,6 +593,28 @@ export const FontPickerList = React.memo(
               font={font}
               order={
                 index + sceneFilteredFonts.length + recentFilteredFonts.length
+              }
+            />
+          ))}
+        </DropdownMenuGroup>,
+      );
+    }
+
+    if (systemFilteredFonts.length) {
+      groups.push(
+        <DropdownMenuGroup
+          title={t("fontList.webSafeFonts")}
+          key="group_web_safe"
+        >
+          {systemFilteredFonts.map((font, index) => (
+            <FontPickerListItem
+              key={font.value}
+              font={font}
+              order={
+                index +
+                sceneFilteredFonts.length +
+                recentFilteredFonts.length +
+                availableFilteredFonts.length
               }
             />
           ))}

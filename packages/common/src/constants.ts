@@ -151,22 +151,73 @@ export const FONT_FAMILY = {
   "Comic Shanns": 8,
   "Liberation Sans": 9,
   Assistant: 10,
+  // web-safe system fonts: drawn with the font installed on the machine, or
+  // else with a bundled look-alike (see `WEB_SAFE_FONT_BACKUPS`). Fork-only
+  // ids, kept in the 200s so they stay clear of the ids upstream adds after 10.
+  Arial: 201,
+  "Comic Sans MS": 202,
+  "Courier New": 203,
+  Georgia: 204,
+  Impact: 205,
+  "Times New Roman": 206,
+  Verdana: 207,
 };
 
 // Segoe UI Emoji fails to properly fallback for some glyphs: ∞, ∫, ≠
 // so we need to have generic font fallback before it
 export const SANS_SERIF_GENERIC_FONT = "sans-serif";
 export const MONOSPACE_GENERIC_FONT = "monospace";
+export const SERIF_GENERIC_FONT = "serif";
 
 export const FONT_FAMILY_GENERIC_FALLBACKS = {
+  [SERIF_GENERIC_FONT]: 997,
   [SANS_SERIF_GENERIC_FONT]: 998,
   [MONOSPACE_GENERIC_FONT]: 999,
 };
 
 export const FONT_FAMILY_FALLBACKS = {
   [CJK_HAND_DRAWN_FALLBACK_FONT]: 100,
+  // bundled look-alikes of the web-safe system fonts
+  Tinos: 101,
+  Cousine: 102,
+  Gelasio: 103,
+  "Comic Relief": 104,
+  Anton: 105,
+  "DejaVu Sans": 106,
   ...FONT_FAMILY_GENERIC_FALLBACKS,
   [WINDOWS_EMOJI_FALLBACK_FONT]: 1000,
+};
+
+/**
+ * The bundled look-alike drawn instead of a web-safe system font where that
+ * font isn't installed (Android, most Linux, a server), and embedded in SVG
+ * exports. They have the same letter widths as the font they stand in for, so
+ * the text is laid out the same either way, except for Anton (Impact) and
+ * DejaVu Sans (Verdana), which are only close.
+ */
+export const WEB_SAFE_FONT_BACKUPS: Record<
+  number,
+  keyof typeof FONT_FAMILY | keyof typeof FONT_FAMILY_FALLBACKS
+> = {
+  [FONT_FAMILY.Arial]: "Liberation Sans",
+  [FONT_FAMILY["Comic Sans MS"]]: "Comic Relief",
+  [FONT_FAMILY["Courier New"]]: "Cousine",
+  [FONT_FAMILY.Georgia]: "Gelasio",
+  [FONT_FAMILY.Impact]: "Anton",
+  [FONT_FAMILY["Times New Roman"]]: "Tinos",
+  [FONT_FAMILY.Verdana]: "DejaVu Sans",
+};
+
+/** id of the bundled look-alike of a web-safe system font, if it has one */
+export const getWebSafeFontBackupFamily = (
+  fontFamily: number,
+): number | undefined => {
+  const backup = WEB_SAFE_FONT_BACKUPS[fontFamily];
+
+  return backup
+    ? FONT_FAMILY[backup as keyof typeof FONT_FAMILY] ??
+        FONT_FAMILY_FALLBACKS[backup as keyof typeof FONT_FAMILY_FALLBACKS]
+    : undefined;
 };
 
 export function getGenericFontFamilyFallback(
@@ -175,7 +226,12 @@ export function getGenericFontFamilyFallback(
   switch (fontFamily) {
     case FONT_FAMILY.Cascadia:
     case FONT_FAMILY["Comic Shanns"]:
+    case FONT_FAMILY["Courier New"]:
       return MONOSPACE_GENERIC_FONT;
+
+    case FONT_FAMILY.Georgia:
+    case FONT_FAMILY["Times New Roman"]:
+      return SERIF_GENERIC_FONT;
 
     default:
       return SANS_SERIF_GENERIC_FONT;
@@ -184,8 +240,17 @@ export function getGenericFontFamilyFallback(
 
 export const getFontFamilyFallbacks = (
   fontFamily: number,
-): Array<keyof typeof FONT_FAMILY_FALLBACKS> => {
+): Array<keyof typeof FONT_FAMILY | keyof typeof FONT_FAMILY_FALLBACKS> => {
   const genericFallbackFont = getGenericFontFamilyFallback(fontFamily);
+  const webSafeBackupFont = WEB_SAFE_FONT_BACKUPS[fontFamily];
+
+  if (webSafeBackupFont) {
+    return [
+      webSafeBackupFont,
+      genericFallbackFont,
+      WINDOWS_EMOJI_FALLBACK_FONT,
+    ];
+  }
 
   switch (fontFamily) {
     case FONT_FAMILY.Excalifont:

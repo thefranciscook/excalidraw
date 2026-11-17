@@ -749,6 +749,7 @@
     },
     "sceneFonts": "In this scene",
     "availableFonts": "Available fonts",
+    "webSafeFonts": "Web-safe fonts",
     "empty": "No fonts found",
     "topPicksTip": "Tip: drag any font onto your top picks to pin it",
     "resetTopPicks": "Reset to default top picks",

@@ -302,4 +302,120 @@ describe("FontPicker", () => {
       );
     });
   });
+
+  describe("web-safe fonts", () => {
+    const WEB_SAFE_FONTS = [
+      "Arial",
+      "Comic Sans MS",
+      "Courier New",
+      "Georgia",
+      "Impact",
+      "Times New Roman",
+      "Verdana",
+    ];
+
+    // hovering or picking a font checks whether it's loaded
+    beforeEach(() => {
+      vi.mocked(document.fonts.check).mockReturnValue(true);
+    });
+
+    const openPickerWithText = async (
+      fontFamily: number = FONT_FAMILY.Excalifont,
+    ) => {
+      const utils = await render(<Excalidraw handleKeyboardGlobally={true} />);
+      const text = API.createElement({ type: "text", text: "hello" });
+      API.updateElement(text, { fontFamily });
+      API.setElements([text]);
+      API.setSelectedElements([text]);
+
+      act(() => {
+        utils.getByTestId("font-family-show-fonts").click();
+      });
+
+      return { ...utils, text };
+    };
+
+    /** the font names listed in the group with the passed title */
+    const getGroupFonts = (title: string) => {
+      const group = Array.from(
+        document.querySelectorAll(".dropdown-menu-group"),
+      ).find(
+        (element) =>
+          element.querySelector(".dropdown-menu-group-title")?.textContent ===
+          title,
+      );
+
+      return group
+        ? Array.from(group.querySelectorAll("button")).map(
+            (button) => button.title,
+          )
+        : null;
+    };
+
+    it("lists them in a group of their own, after the bundled fonts", async () => {
+      await openPickerWithText();
+
+      expect(getGroupFonts("Web-safe fonts")).toEqual(WEB_SAFE_FONTS);
+
+      const availableFonts = getGroupFonts("Available fonts")!;
+
+      expect(availableFonts).toContain("Nunito");
+      for (const font of WEB_SAFE_FONTS) {
+        expect(availableFonts).not.toContain(font);
+      }
+
+      // the bundled look-alikes aren't offered on their own
+      for (const font of ["Tinos", "Cousine", "Gelasio", "Liberation Sans"]) {
+        expect(document.querySelector(`button[title="${font}"]`)).toBe(null);
+      }
+
+      // the groups are listed in the order the keyboard walks them
+      const titles = Array.from(
+        document.querySelectorAll(".dropdown-menu-group-title"),
+      ).map((title) => title.textContent);
+
+      expect(titles).toEqual([
+        "In this scene",
+        "Available fonts",
+        "Web-safe fonts",
+      ]);
+    });
+
+    it("moves a font used on the board into the scene group", async () => {
+      await openPickerWithText(FONT_FAMILY.Georgia);
+
+      expect(getGroupFonts("In this scene")).toEqual(["Georgia"]);
+      expect(getGroupFonts("Web-safe fonts")).toEqual(
+        WEB_SAFE_FONTS.filter((font) => font !== "Georgia"),
+      );
+    });
+
+    it("applies the picked font with its own line height", async () => {
+      const { text } = await openPickerWithText();
+
+      act(() => {
+        (
+          document.querySelector('button[title="Georgia"]') as HTMLElement
+        ).click();
+      });
+
+      await waitFor(() =>
+        expect(API.getElement(text).fontFamily).toBe(FONT_FAMILY.Georgia),
+      );
+      expect(API.getElement(text).lineHeight).toBe(1.15);
+    });
+
+    it("finds them by name", async () => {
+      const { container } = await openPickerWithText();
+
+      const input = (container.querySelector(".QuickSearch__input") ??
+        document.querySelector(".QuickSearch__input")) as HTMLInputElement;
+      fireEvent.change(input, { target: { value: "times" } });
+
+      await waitFor(() =>
+        expect(getGroupFonts("Web-safe fonts")).toEqual(["Times New Roman"]),
+      );
+      expect(getGroupFonts("Available fonts")).toBe(null);
+    });
+  });
 });

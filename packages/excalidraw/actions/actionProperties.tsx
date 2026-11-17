@@ -1347,7 +1347,15 @@ export const actionChangeFontFamily = register<{
       const chars = Array.from(uniqueChars.values()).join();
       const ownerDocument = app.props.ownerDocument ?? document;
 
-      if (skipFontFaceCheck || ownerDocument.fonts.check(fontString, chars)) {
+      if (
+        skipFontFaceCheck ||
+        Fonts.areFontFacesLoaded(
+          nextFontFamily,
+          fontString,
+          chars,
+          ownerDocument.fonts,
+        )
+      ) {
         // we either skip the check (have at least one font face loaded) or do the check and find out all the font faces have loaded
         for (const [element, container] of elementContainerMapping) {
           // trigger synchronous redraw

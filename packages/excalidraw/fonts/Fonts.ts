@@ -5,6 +5,7 @@ import {
   CJK_HAND_DRAWN_FALLBACK_FONT,
   WINDOWS_EMOJI_FALLBACK_FONT,
   getFontFamilyFallbacks,
+  getWebSafeFontBackupFamily,
   FONT_SIZES,
   isGoogleFontFamily,
   registerRuntimeFont,
@@ -37,11 +38,16 @@ import type { ValueOf } from "@excalidraw/common/utility-types";
 
 import type { Scene } from "@excalidraw/element";
 
+import { AntonFontFaces } from "./Anton";
 import { CascadiaFontFaces } from "./Cascadia";
+import { ComicReliefFontFaces } from "./ComicRelief";
 import { ComicShannsFontFaces } from "./ComicShanns";
+import { CousineFontFaces } from "./Cousine";
+import { DejaVuSansFontFaces } from "./DejaVuSans";
 import { EmojiFontFaces } from "./Emoji";
 import { ExcalidrawFontFace } from "./ExcalidrawFontFace";
 import { ExcalifontFontFaces } from "./Excalifont";
+import { GelasioFontFaces } from "./Gelasio";
 import {
   fetchGoogleFontDescriptors,
   getGoogleFontInfoAsync,
@@ -53,6 +59,8 @@ import { HelveticaFontFaces } from "./Helvetica";
 import { LiberationFontFaces } from "./Liberation";
 import { LilitaFontFaces } from "./Lilita";
 import { NunitoFontFaces } from "./Nunito";
+import { SystemFontFaces } from "./SystemFonts";
+import { TinosFontFaces } from "./Tinos";
 import { VirgilFontFaces } from "./Virgil";
 import { XiaolaiFontFaces } from "./Xiaolai";
 
@@ -313,6 +321,29 @@ export class Fonts {
       }
     }
 
+    // a web-safe system font (i.e. Arial) cannot be inlined, as there is no
+    // font file to read, so its bundled look-alike is inlined instead: where
+    // the system font is missing, the exported text still looks alike
+    for (const family of [...families]) {
+      const backupFamily = getWebSafeFontBackupFamily(family);
+
+      if (backupFamily === undefined) {
+        continue;
+      }
+
+      const characters = Fonts.getCharacters(charsPerFamily, family);
+
+      // the backup could be also used on its own (i.e. Liberation Sans)
+      charsPerFamily[backupFamily] = new Set([
+        ...(charsPerFamily[backupFamily] ?? []),
+        ...characters,
+      ]);
+
+      if (!families.includes(backupFamily)) {
+        families.push(backupFamily);
+      }
+    }
+
     // don't trigger hundreds of concurrent requests (each performing fetch, creating a worker, etc.),
     // instead go three requests at a time, in a controlled manner, without completely blocking the main thread
     // and avoiding potential issues such as rate limits
@@ -322,6 +353,42 @@ export class Fonts {
 
     // dedup just in case (i.e. could be the same font faces with 0 glyphs)
     return Array.from(new Set(fontFaces));
+  }
+
+  /**
+   * Whether the font faces needed to draw the text in the font family have
+   * loaded, so that the text can be measured and drawn right away.
+   */
+  public static areFontFacesLoaded(
+    fontFamily: ExcalidrawTextElement["fontFamily"],
+    /** css font string of the family, with any size */
+    font: string,
+    text: string,
+    fontFaceSet: FontFaceSet,
+  ): boolean {
+    if (!fontFaceSet.check(font, text)) {
+      return false;
+    }
+
+    // `check()` isn't enough for the bundled look-alike of a web-safe system
+    // font: it also passes when the machine has a font of the same name (i.e.
+    // DejaVu Sans on Linux, or an alias of Tinos), though the one drawn is the
+    // bundled one, which may not have loaded yet
+    const backupFamily = getWebSafeFontBackupFamily(fontFamily);
+
+    if (backupFamily === undefined) {
+      return true;
+    }
+
+    return !Fonts.registered
+      .get(backupFamily)
+      ?.fontFaces.some(
+        (fontFace) =>
+          (fontFace.fontFace.status === "unloaded" ||
+            fontFace.fontFace.status === "loading") &&
+          fontFaceSet.has(fontFace.fontFace) &&
+          fontFace.covers(text),
+      );
   }
 
   private static async loadFontFaces(
@@ -369,7 +436,7 @@ export class Fonts {
       // instead, we are always checking chars used in the family, so that no required font faces remain unloaded
       const text = Fonts.getCharacters(charsPerFamily, fontFamily);
 
-      if (!fontFaceSet.check(font, text)) {
+      if (!Fonts.areFontFacesLoaded(fontFamily, font, text, fontFaceSet)) {
         yield promiseTry(async () => {
           try {
             // WARN: browser prioritizes loading only font faces with unicode ranges for characters which are present in the document (html & canvas), other font faces could stay unloaded
@@ -669,8 +736,25 @@ export class Fonts {
     init("Nunito", ...NunitoFontFaces);
     init("Virgil", ...VirgilFontFaces);
 
+    // web-safe system fonts, drawn with the font installed on the machine
+    init("Arial", ...SystemFontFaces);
+    init("Comic Sans MS", ...SystemFontFaces);
+    init("Courier New", ...SystemFontFaces);
+    init("Georgia", ...SystemFontFaces);
+    init("Impact", ...SystemFontFaces);
+    init("Times New Roman", ...SystemFontFaces);
+    init("Verdana", ...SystemFontFaces);
+
     // fallback font faces
     init(CJK_HAND_DRAWN_FALLBACK_FONT, ...XiaolaiFontFaces);
+    // bundled look-alikes of the web-safe system fonts, drawn where the
+    // system font isn't installed (Arial's is Liberation Sans, above)
+    init("Tinos", ...TinosFontFaces);
+    init("Cousine", ...CousineFontFaces);
+    init("Gelasio", ...GelasioFontFaces);
+    init("Comic Relief", ...ComicReliefFontFaces);
+    init("Anton", ...AntonFontFaces);
+    init("DejaVu Sans", ...DejaVuSansFontFaces);
     init(WINDOWS_EMOJI_FALLBACK_FONT, ...EmojiFontFaces);
 
     Fonts._initialized = true;
