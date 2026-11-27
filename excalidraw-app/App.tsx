@@ -620,8 +620,20 @@ const ExcalidrawWrapper = () => {
           const localDataState = importFromLocalStorage();
           const username = importUsernameFromLocalStorage();
           setLangCode(getPreferredLanguage());
+          // Keep this tab's own viewport: the stored scroll and zoom are
+          // whichever tab saved last, so taking them would make two windows
+          // on the same board jump to each other's view on every switch.
+          const { scrollX, scrollY, zoom, scrolledOutside } =
+            excalidrawAPI.getAppState();
           excalidrawAPI.updateScene({
-            ...localDataState,
+            elements: localDataState.elements,
+            appState: localDataState.appState && {
+              ...localDataState.appState,
+              scrollX,
+              scrollY,
+              zoom,
+              scrolledOutside,
+            },
             captureUpdate: CaptureUpdateAction.NEVER,
           });
           LibraryIndexedDBAdapter.load().then((data) => {
