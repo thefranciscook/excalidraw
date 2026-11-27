@@ -111,6 +111,7 @@ import { ColorPicker } from "../components/ColorPicker/ColorPicker";
 import { FontPicker } from "../components/FontPicker/FontPicker";
 import { IconPicker } from "../components/IconPicker";
 import { Range } from "../components/Range";
+import { FontSizeStepper, stepFontSize } from "../components/FontSizeStepper";
 import {
   ArrowheadArrowIcon,
   ArrowheadBarIcon,
@@ -1007,101 +1008,114 @@ export const actionChangeOpacity = register<ExcalidrawElement["opacity"]>({
   },
 });
 
-export const actionChangeFontSize = register<ExcalidrawTextElement["fontSize"]>(
-  {
-    name: "changeFontSize",
-    label: "labels.fontSize",
-    trackEvent: false,
-    perform: (elements, appState, value, app) => {
+/** a font size, or a step up (`1`) or down (`-1`) the size ladder */
+type FontSizeChange = ExcalidrawTextElement["fontSize"] | { step: 1 | -1 };
+
+export const actionChangeFontSize = register<FontSizeChange>({
+  name: "changeFontSize",
+  label: "labels.fontSize",
+  trackEvent: false,
+  perform: (elements, appState, value, app) => {
+    invariant(value, "actionChangeFontSize: Expected a font size value");
+    if (typeof value === "object") {
+      // each text steps from its own size, so mixed sizes stay apart
       return changeFontSize(
         elements,
         appState,
         app,
-        () => {
-          invariant(value, "actionChangeFontSize: Expected a font size value");
-          return value;
-        },
-        value,
+        (element) =>
+          stepFontSize(
+            getBaseFontSize(element, app.scene.getNonDeletedElementsMap()),
+            value.step,
+          ),
+        stepFontSize(
+          appState.currentItemFontSize || DEFAULT_FONT_SIZE,
+          value.step,
+        ),
       );
-    },
-    PanelComponent: ({ elements, appState, updateData, app, data }) => {
-      const { isCompact } = getStylesPanelInfo(app);
-
-      return (
-        <fieldset>
-          <legend>{t("labels.fontSize")}</legend>
-          <div className="buttonList">
-            <RadioSelection
-              group="font-size"
-              options={[
-                {
-                  value: FONT_SIZES.sm,
-                  text: t("labels.small"),
-                  icon: FontSizeSmallIcon,
-                  testId: "fontSize-small",
-                },
-                {
-                  value: FONT_SIZES.md,
-                  text: t("labels.medium"),
-                  icon: FontSizeMediumIcon,
-                  testId: "fontSize-medium",
-                },
-                {
-                  value: FONT_SIZES.lg,
-                  text: t("labels.large"),
-                  icon: FontSizeLargeIcon,
-                  testId: "fontSize-large",
-                },
-                {
-                  value: FONT_SIZES.xl,
-                  text: t("labels.veryLarge"),
-                  icon: FontSizeExtraLargeIcon,
-                  testId: "fontSize-veryLarge",
-                },
-              ]}
-              value={getFormValue(
-                elements,
-                app,
-                (element) => {
-                  const elementsMap = app.scene.getNonDeletedElementsMap();
-                  if (isTextElement(element)) {
-                    return getBaseFontSize(element, elementsMap);
-                  }
-                  const boundTextElement = getBoundTextElement(
-                    element,
-                    elementsMap,
-                  );
-                  if (boundTextElement) {
-                    return getBaseFontSize(boundTextElement, elementsMap);
-                  }
-                  return null;
-                },
-                (element) =>
-                  isTextElement(element) ||
-                  getBoundTextElement(
-                    element,
-                    app.scene.getNonDeletedElementsMap(),
-                  ) !== null,
-                (hasSelection) =>
-                  hasSelection
-                    ? null
-                    : appState.currentItemFontSize || DEFAULT_FONT_SIZE,
-              )}
-              onChange={(value) => {
-                withCaretPositionPreservation(
-                  () => updateData(value),
-                  isCompact,
-                  !!appState.editingTextElement,
-                  data?.onPreventClose,
-                );
-              }}
-            />
-          </div>
-        </fieldset>
-      );
-    },
+    }
+    return changeFontSize(elements, appState, app, () => value, value);
   },
-);
+  PanelComponent: ({ elements, appState, updateData, app, data }) => {
+    const { isCompact } = getStylesPanelInfo(app);
+
+    const elementsMap = app.scene.getNonDeletedElementsMap();
+    const getTextFontSize = (element: ExcalidrawElement) => {
+      if (isTextElement(element)) {
+        return getBaseFontSize(element, elementsMap);
+      }
+      const boundTextElement = getBoundTextElement(element, elementsMap);
+      if (boundTextElement) {
+        return getBaseFontSize(boundTextElement, elementsMap);
+      }
+      return null;
+    };
+    const hasText = (element: ExcalidrawElement) =>
+      isTextElement(element) ||
+      getBoundTextElement(element, elementsMap) !== null;
+    const fontSize = getFormValue(
+      elements,
+      app,
+      getTextFontSize,
+      hasText,
+      (hasSelection) =>
+        hasSelection ? null : appState.currentItemFontSize || DEFAULT_FONT_SIZE,
+    );
+
+    const apply = (value: FontSizeChange) => {
+      withCaretPositionPreservation(
+        () => updateData(value),
+        isCompact,
+        !!appState.editingTextElement,
+        data?.onPreventClose,
+      );
+    };
+
+    return (
+      <fieldset>
+        <legend>{t("labels.fontSize")}</legend>
+        <div className="buttonList">
+          <RadioSelection
+            group="font-size"
+            options={[
+              {
+                value: FONT_SIZES.sm,
+                text: t("labels.small"),
+                icon: FontSizeSmallIcon,
+                testId: "fontSize-small",
+              },
+              {
+                value: FONT_SIZES.md,
+                text: t("labels.medium"),
+                icon: FontSizeMediumIcon,
+                testId: "fontSize-medium",
+              },
+              {
+                value: FONT_SIZES.lg,
+                text: t("labels.large"),
+                icon: FontSizeLargeIcon,
+                testId: "fontSize-large",
+              },
+              {
+                value: FONT_SIZES.xl,
+                text: t("labels.veryLarge"),
+                icon: FontSizeExtraLargeIcon,
+                testId: "fontSize-veryLarge",
+              },
+            ]}
+            value={fontSize}
+            onChange={(value) => apply(value)}
+          />
+        </div>
+        <FontSizeStepper
+          value={fontSize}
+          onChange={(value) => apply(value)}
+          onStep={(step) => apply({ step })}
+        />
+      </fieldset>
+    );
+  },
+});
 
 export const actionDecreaseFontSize = register({
   name: "decreaseFontSize",

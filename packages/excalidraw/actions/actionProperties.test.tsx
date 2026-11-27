@@ -8,6 +8,7 @@ import {
   STROKE_WIDTH,
 } from "@excalidraw/common";
 
+import { stepFontSize } from "../components/FontSizeStepper";
 import { Excalidraw } from "../index";
 import { API } from "../tests/helpers/api";
 import { UI } from "../tests/helpers/ui";
@@ -250,6 +251,81 @@ describe("element locking", () => {
       expect(queryByTestId(document.body, `font-family-code`)).toHaveClass(
         "active",
       );
+    });
+  });
+
+  describe("font size stepper", () => {
+    const fontSizes = () =>
+      window.h.elements.map((element) =>
+        element.type === "text" ? element.fontSize : null,
+      );
+    const input = () =>
+      queryByTestId(document.body, "fontSize-input") as HTMLInputElement;
+
+    it("steps through the size ladder", () => {
+      expect(stepFontSize(20, 1)).toBe(24);
+      expect(stepFontSize(20, -1)).toBe(16);
+      // off-ladder sizes go to the nearest step in that direction
+      expect(stepFontSize(21, 1)).toBe(24);
+      expect(stepFontSize(21, -1)).toBe(20);
+      // past the ends
+      expect(stepFontSize(512, 1)).toBe(576);
+      expect(stepFontSize(600, -1)).toBe(576);
+      expect(stepFontSize(576, -1)).toBe(512);
+      expect(stepFontSize(6, -1)).toBe(5);
+      expect(stepFontSize(1, -1)).toBe(1);
+      expect(stepFontSize(990, 1)).toBe(999);
+    });
+
+    it("shows, steps and sets the selected text's size", () => {
+      const text = API.createElement({ type: "text", fontSize: 20 });
+      API.setElements([text]);
+      API.setSelectedElements([text]);
+
+      expect(input().value).toBe("20");
+
+      fireEvent.click(queryByTestId(document.body, "fontSize-increase")!);
+      expect(fontSizes()).toEqual([24]);
+      expect(input().value).toBe("24");
+
+      fireEvent.click(queryByTestId(document.body, "fontSize-decrease")!);
+      fireEvent.click(queryByTestId(document.body, "fontSize-decrease")!);
+      expect(fontSizes()).toEqual([16]);
+      expect(queryByTestId(document.body, "fontSize-small")).toBeChecked();
+
+      fireEvent.change(input(), { target: { value: "42" } });
+      fireEvent.keyDown(input(), { key: "Enter" });
+      expect(fontSizes()).toEqual([42]);
+      expect(window.h.state.currentItemFontSize).toBe(42);
+    });
+
+    it("keeps mixed sizes apart when stepping", () => {
+      const small = API.createElement({ type: "text", fontSize: 16 });
+      const large = API.createElement({ type: "text", fontSize: 36 });
+      API.setElements([small, large]);
+      API.setSelectedElements([small, large]);
+
+      expect(input().value).toBe("");
+      expect(input().placeholder).toBe("Mixed");
+
+      fireEvent.click(queryByTestId(document.body, "fontSize-increase")!);
+      expect(fontSizes()).toEqual([20, 40]);
+
+      fireEvent.change(input(), { target: { value: "30" } });
+      fireEvent.blur(input());
+      expect(fontSizes()).toEqual([30, 30]);
+      expect(input().value).toBe("30");
+    });
+
+    it("ignores input that isn't a size", () => {
+      const text = API.createElement({ type: "text", fontSize: 20 });
+      API.setElements([text]);
+      API.setSelectedElements([text]);
+
+      fireEvent.change(input(), { target: { value: "abc" } });
+      fireEvent.keyDown(input(), { key: "Enter" });
+      expect(fontSizes()).toEqual([20]);
+      expect(input().value).toBe("20");
     });
   });
 });
